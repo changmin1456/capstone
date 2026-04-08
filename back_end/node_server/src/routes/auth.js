@@ -1,6 +1,6 @@
 const express = require("express");
 
-const { ensureIndexes, findByEmail, createUser, deleteUserById, createPasswordResetRequestByEmail, consumePasswordResetTokenAndSetPassword } = require("../db/users");
+const { ensureIndexes, findByEmail, findById, createUser, deleteUserById, setPasswordHashById, createPasswordResetRequestByEmail, consumePasswordResetTokenAndSetPassword } = require("../db/users");
 const { hashPassword, verifyPassword } = require("../utils/password");
 const { signAccessToken } = require("../utils/jwt");
 const { requireAuth } = require("../middleware/auth");
@@ -115,6 +115,40 @@ router.delete("/auth/me", requireAuth, async (req, res) => {
     return res.json({ deleted: r.deletedCount === 1 });
   } catch (err) {
     return res.status(500).json({ error: err?.message || "Failed to delete" });
+  }
+});
+
+/**
+ * @swagger
+ * /api/auth/password:
+ *   post:
+ *     summary: Change current user's password
+ *     tags: [Auth]
+ */
+router.post("/auth/password", requireAuth, async (req, res) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newPassword = String(req.body?.newPassword || "");
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Missing passwords" });
+    }
+
+    const user = await findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const ok = await verifyPassword(currentPassword, user.passwordHash);
+    if (!ok) {
+      return res.status(401).json({ error: "Invalid current password" });
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    await setPasswordHashById(req.user.id, passwordHash);
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || "Failed to update password" });
   }
 });
 

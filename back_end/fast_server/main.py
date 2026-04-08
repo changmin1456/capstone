@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 
 from endpoints.datasets import router as datasets_router
 from endpoints.experiments import router as experiments_router
+from endpoints.auth import router as auth_router
 from endpoints.health import router as health_router
 from endpoints.job_detail import router as job_detail_router
 from endpoints.models import router as models_router
@@ -112,6 +113,7 @@ def root():
 
 # Routers (Swagger groups by each router.tags)
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(train_router)
 app.include_router(jobs_router)
 app.include_router(job_detail_router)

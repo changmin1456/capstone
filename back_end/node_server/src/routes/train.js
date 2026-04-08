@@ -2,6 +2,7 @@
 const express = require("express");
 const axios = require("axios");
 const { getDb, toObjectId } = require("../db/mongo");
+const { authHeaders } = require("../utils/forwardAuth");
 
 const router = express.Router();
 
@@ -117,16 +118,20 @@ router.post("/train", async (req, res) => {
     }
 
     // FastAPI /train으로 요청 전달
-    const response = await axios.post(`${FAST_API_BASE}/train`, {
-      project_id,
-      dataset_path,
-      lr: lr || 1e-3,
-      batch_size: batch_size || 32,
-      epochs: epochs || 10,
-      optimizer: optimizer || "adam",
-      seed: seed || 42,
-      model_name: model_name || "resnet18",
-    });
+    const response = await axios.post(
+      `${FAST_API_BASE}/train`,
+      {
+        project_id,
+        dataset_path,
+        lr: lr || 1e-3,
+        batch_size: batch_size || 32,
+        epochs: epochs || 10,
+        optimizer: optimizer || "adam",
+        seed: seed || 42,
+        model_name: model_name || "resnet18",
+      },
+      { headers: authHeaders(req) },
+    );
 
     // FastAPI 응답을 그대로 반환
     res.status(response.status).json(response.data);
@@ -276,4 +281,3 @@ router.delete("/train/:id", async (req, res) => {
 });
 
 module.exports = router;
-

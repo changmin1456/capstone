@@ -35,6 +35,21 @@ const swaggerOptions = {
         description: "Development server",
       },
     ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+          description: "Paste token from /api/auth/login or /api/auth/register",
+        },
+      },
+    },
+    security: [
+      {
+        bearerAuth: [],
+      },
+    ],
   },
   apis: [
     path.join(__dirname, "routes", "*.js"),  // routes 폴더의 모든 파일

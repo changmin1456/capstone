@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { Project } from "../apis/projects";
+import { useI18n } from "../i18n";
 
 type Props = {
   open: boolean;
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export default function ProjectModal({ open, project, onClose, onSave }: Props) {
+  const { t } = useI18n();
   const initialName = useMemo(() => project?.name ?? "", [project?.name]);
   const initialDescription = useMemo(() => project?.description ?? "", [project?.description]);
 
@@ -37,18 +39,18 @@ export default function ProjectModal({ open, project, onClose, onSave }: Props) 
     try {
       await onSave({ name: name.trim(), description: description.trim() });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to update project");
+      setError(e instanceof Error ? e.message : t("projects.apiErrorHelp"));
       setSaving(false);
     }
   };
 
   const isEdit = Boolean(project?._id);
-  const title = isEdit ? "Project Detail" : "Create Project";
-  const primaryLabel = isEdit ? "저장" : "생성";
+  const title = isEdit ? t("projects.detailTitle") : t("projects.createTitle");
+  const primaryLabel = isEdit ? t("common.save") : t("common.create");
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[rgb(var(--theme-overlay)/0.55)] p-4"
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -56,7 +58,7 @@ export default function ProjectModal({ open, project, onClose, onSave }: Props) 
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-[#0b1020] shadow-[0_30px_120px_rgba(0,0,0,0.65)]">
+      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-[rgb(var(--theme-panel-strong))] shadow-[0_30px_120px_rgba(0,0,0,0.65)]">
         <div className="flex items-start justify-between gap-3 border-b border-white/10 bg-white/[0.03] px-6 py-4">
           <div>
             <div className="mt-1 text-lg font-extrabold text-white/90">{title}</div>
@@ -66,24 +68,24 @@ export default function ProjectModal({ open, project, onClose, onSave }: Props) 
 
         <div className="px-6 py-5 space-y-4">
           <label className="block">
-            <div className="text-xs font-semibold text-white/60">프로젝트 이름</div>
+            <div className="text-xs font-semibold text-white/60">{t("projects.projectName")}</div>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/90 placeholder:text-white/30 outline-none focus:border-sky-300/40"
-              placeholder="예) 얼굴 인식 프로그램"
+              placeholder={t("projects.projectNamePlaceholder")}
               autoFocus
             />
           </label>
 
           <label className="block">
-            <div className="text-xs font-semibold text-white/60">설명</div>
+            <div className="text-xs font-semibold text-white/60">{t("projects.description")}</div>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className="mt-2 min-h-[110px] w-full resize-none rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/90 placeholder:text-white/30 outline-none focus:border-sky-300/40"
-              placeholder="프로젝트 설명"
+              placeholder={t("projects.descriptionPlaceholder")}
             />
           </label>
 
@@ -103,7 +105,7 @@ export default function ProjectModal({ open, project, onClose, onSave }: Props) 
             className="h-10 rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/10"
             disabled={saving}
           >
-            취소
+            {t("common.cancel")}
           </button>
           <button
             type="button"

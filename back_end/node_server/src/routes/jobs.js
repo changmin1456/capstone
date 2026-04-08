@@ -6,6 +6,7 @@ const fs = require("fs").promises;
 const { getDb, toObjectId } = require("../db/mongo");
 const { requireAuth } = require("../middleware/auth");
 const { isAdmin } = require("../middleware/authz");
+const { authHeaders } = require("../utils/forwardAuth");
 
 async function requireJobOwnerOrAdmin(req, res) {
   if (isAdmin(req)) return { ok: true, job: null };
@@ -36,6 +37,35 @@ const JOBS_COLLECTION = process.env.JOBS_COLLECTION || "jobs";
 const PROJECTS_COLLECTION = process.env.PROJECTS_COLLECTION || "projects";
 const DATASET_ROOT = path.join(__dirname, "../../../fast_server/datasets");
 const JOB_META_FILE = "job.meta.json";
+
+async function touchJobUpdatedAt(jobId) {
+  try {
+    const db = getDb();
+    const jobsCol = db.collection(JOBS_COLLECTION);
+    const objectId = toObjectId(String(jobId));
+    await jobsCol.updateOne({ _id: objectId }, { $set: { updated_at: new Date() } });
+  } catch (err) {
+    console.warn("touchJobUpdatedAt failed:", err?.message || err);
+  }
+}
+
+async function touchProjectLastRun(jobId) {
+  try {
+    const db = getDb();
+    const jobsCol = db.collection(JOBS_COLLECTION);
+    const projectsCol = db.collection(PROJECTS_COLLECTION);
+    const objectId = toObjectId(String(jobId));
+    const job = await jobsCol.findOne({ _id: objectId });
+    if (!job?.project_id) return;
+    const projectId = job.project_id;
+    await projectsCol.updateOne(
+      { _id: projectId },
+      { $set: { last_run_at: new Date() } },
+    );
+  } catch (err) {
+    console.warn("touchProjectLastRun failed:", err?.message || err);
+  }
+}
 
 async function writeJsonAtomic(filePath, data) {
   const tmp = `${filePath}.tmp`;
@@ -234,6 +264,7 @@ router.post("/jobs", requireAuth, async (req, res) => {
       dataset_name,
       title,
       description,
+      task,
       lr,
       batch_size,
       epochs,
@@ -312,21 +343,26 @@ router.post("/jobs", requireAuth, async (req, res) => {
     }
 
     // FastAPI /train으로 프록시 (FastAPI 내부 계약)
-    const response = await axios.post(`${FAST_API_BASE}/train`, {
-  project_id: normalizedProjectId,
-  dataset_path: finalDatasetPath,
-      dataset_name,
-      title,
-      description,
-      lr,
-      batch_size,
-      epochs,
-      optimizer,
-      seed,
-      model_name,
-      image_size,
-      search_space,
-    });
+    const response = await axios.post(
+      `${FAST_API_BASE}/train`,
+      {
+        project_id: normalizedProjectId,
+        dataset_path: finalDatasetPath,
+        dataset_name,
+        title,
+        description,
+        task,
+        lr,
+        batch_size,
+        epochs,
+        optimizer,
+        seed,
+        model_name,
+        image_size,
+        search_space,
+      },
+      { headers: authHeaders(req) },
+    );
 
     return res.status(response.status).json(response.data);
   } catch (err) {
@@ -519,9 +555,13 @@ router.post("/jobs/:id/start", requireAuth, async (req, res) => {
   if (!gate.ok) return;
     
     // FastAPI /jobs/{id}/start으로 요청 전달 (학습 실행 요청)
-    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/start`);
+    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/start`, null, {
+      headers: authHeaders(req),
+    });
     
     // FastAPI 응답을 그대로 반환
+    await touchJobUpdatedAt(jobId);
+    await touchProjectLastRun(jobId);
     res.status(response.status).json(response.data);
   } catch (err) {
     console.error("Error calling FastAPI /jobs/:id/start:", err.message);
@@ -568,7 +608,9 @@ router.post("/jobs/:id/stop", requireAuth, async (req, res) => {
   if (!gate.ok) return;
     
     // FastAPI /jobs/{id}/stop으로 요청 전달
-    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/stop`);
+    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/stop`, null, {
+      headers: authHeaders(req),
+    });
     
     // FastAPI 응답을 그대로 반환
     res.status(response.status).json(response.data);
@@ -593,7 +635,9 @@ router.post("/jobs/:id/pause", requireAuth, async (req, res) => {
 
   const gate = await requireJobOwnerOrAdmin(req, res);
   if (!gate.ok) return;
-    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/pause`);
+    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/pause`, null, {
+      headers: authHeaders(req),
+    });
     res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {
@@ -611,7 +655,11 @@ router.post("/jobs/:id/resume", requireAuth, async (req, res) => {
 
   const gate = await requireJobOwnerOrAdmin(req, res);
   if (!gate.ok) return;
-    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/resume`);
+    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/resume`, null, {
+      headers: authHeaders(req),
+    });
+    await touchJobUpdatedAt(jobId);
+    await touchProjectLastRun(jobId);
     res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {
@@ -629,7 +677,9 @@ router.post("/jobs/:id/reset", requireAuth, async (req, res) => {
 
   const gate = await requireJobOwnerOrAdmin(req, res);
   if (!gate.ok) return;
-    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/reset`);
+    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/reset`, null, {
+      headers: authHeaders(req),
+    });
     res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {
@@ -708,6 +758,7 @@ router.post("/jobs/:id/deploy", requireAuth, async (req, res) => {
 
     const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/deploy`, null, {
       params: { target },
+      headers: authHeaders(req),
     });
 
     res.status(response.status).json(response.data);
@@ -734,7 +785,9 @@ router.get("/jobs/:id/xai/sources", requireAuth, async (req, res) => {
 
   const gate = await requireJobOwnerOrAdmin(req, res);
   if (!gate.ok) return;
-    const response = await axios.get(`${FAST_API_BASE}/jobs/${jobId}/xai/sources`);
+    const response = await axios.get(`${FAST_API_BASE}/jobs/${jobId}/xai/sources`, {
+      headers: authHeaders(req),
+    });
     res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {
@@ -755,6 +808,7 @@ router.get("/jobs/:id/xai/images", requireAuth, async (req, res) => {
   if (!gate.ok) return;
     const response = await axios.get(`${FAST_API_BASE}/jobs/${jobId}/xai/images`, {
       params: { source, limit },
+      headers: authHeaders(req),
     });
     res.status(response.status).json(response.data);
   } catch (err) {
@@ -774,10 +828,14 @@ router.post("/jobs/:id/xai/generate", requireAuth, async (req, res) => {
 
   const gate = await requireJobOwnerOrAdmin(req, res);
   if (!gate.ok) return;
-    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/xai/generate`, {
-      source,
-      image_id,
-    });
+    const response = await axios.post(
+      `${FAST_API_BASE}/jobs/${jobId}/xai/generate`,
+      {
+        source,
+        image_id,
+      },
+      { headers: authHeaders(req) },
+    );
     res.status(response.status).json(response.data);
   } catch (err) {
     if (err.response) {
@@ -872,9 +930,13 @@ router.post("/jobs/:id/restart", async (req, res) => {
     const { id: jobId } = req.params;
     
     // FastAPI /jobs/{id}/restart으로 요청 전달
-    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/restart`);
+    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/restart`, null, {
+      headers: authHeaders(req),
+    });
     
     // FastAPI 응답을 그대로 반환
+    await touchJobUpdatedAt(jobId);
+    await touchProjectLastRun(jobId);
     res.status(response.status).json(response.data);
   } catch (err) {
     console.error("Error calling FastAPI /jobs/:id/restart:", err.message);

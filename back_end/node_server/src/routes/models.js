@@ -2,99 +2,38 @@
 const express = require("express");
 const axios = require("axios");
 const Busboy = require("busboy");
+const fs = require("fs").promises;
+const path = require("path");
 const { requireAuth } = require("../middleware/auth");
 const { isAdmin } = require("../middleware/authz");
 const { ensureIndexes, upsertModelMeta, listVisibleModelIdsForUser, getModelMeta } = require("../db/models_meta");
+const { authHeaders } = require("../utils/forwardAuth");
 
 const router = express.Router();
 
 // FastAPI server
 const FAST_API_BASE = "http://127.0.0.1:8000";
+const MODELS_DIR = path.join(__dirname, "../../../fast_server/models");
 
-/**
- * 사용 가능한 모델 목록
- * AI 파트에서 만든 모델을 여기에 추가하세요.
- * 
- * 모델 파일 위치: back_end/fast_server/models/
- */
-const AVAILABLE_MODELS = [
-  // 기본 모델들
-  {
-    id: "resnet18",
-    name: "ResNet-18",
-    description: "18-layer ResNet 모델",
-    category: "classification",
-    file_path: null, // 기본 모델은 파일 경로 없음
-  },
-  {
-    id: "resnet34",
-    name: "ResNet-34",
-    description: "34-layer ResNet 모델",
-    category: "classification",
-    file_path: null,
-  },
-  {
-    id: "resnet50",
-    name: "ResNet-50",
-    description: "50-layer ResNet 모델",
-    category: "classification",
-    file_path: null,
-  },
-  {
-    id: "vgg16",
-    name: "VGG-16",
-    description: "16-layer VGG 모델",
-    category: "classification",
-    file_path: null,
-  },
-  {
-    id: "vgg19",
-    name: "VGG-19",
-    description: "19-layer VGG 모델",
-    category: "classification",
-    file_path: null,
-  },
-  {
-    id: "mobilenet_v2",
-    name: "MobileNet V2",
-    description: "MobileNet V2 경량 모델",
-    category: "classification",
-    file_path: null,
-  },
-  {
-    id: "efficientnet_b0",
-    name: "EfficientNet-B0",
-    description: "EfficientNet-B0 모델",
-    category: "classification",
-    file_path: null,
-  },
-  
-  // AI 파트에서 만든 모델들 (예시 - 실제 모델 정보로 교체하세요)
-  {
-    id: "custom_model_1",
-    name: "커스텀 모델 1",
-    description: "AI 파트에서 만든 첫 번째 모델",
-    category: "custom",
-    file_path: "models/custom_model_1.py", // back_end/fast_server/models/ 기준 상대 경로
-    weights_path: "models/custom_model_1_weights.pth", // 가중치 파일 경로 (선택사항)
-  },
-  {
-    id: "custom_model_2",
-    name: "커스텀 모델 2",
-    description: "AI 파트에서 만든 두 번째 모델",
-    category: "custom",
-    file_path: "models/custom_model_2.py",
-    weights_path: "models/custom_model_2_weights.pth",
-  },
-  {
-    id: "custom_model_3",
-    name: "커스텀 모델 3",
-    description: "AI 파트에서 만든 세 번째 모델",
-    category: "custom",
-    file_path: "models/custom_model_3.py",
-    weights_path: "models/custom_model_3_weights.pth",
-  },
-];
+async function listDiskModels() {
+  try {
+    const entries = await fs.readdir(MODELS_DIR, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isFile())
+      .filter((e) => !e.name.startsWith(".") && e.name.toLowerCase() !== "readme.md")
+      .map((e) => ({
+        id: path.parse(e.name).name,
+        name: path.parse(e.name).name,
+        description: `Disk model ${e.name}`,
+        category: "custom",
+        file_path: path.join(MODELS_DIR, e.name),
+        visibility: "public",
+        ownerUserId: "admin",
+      }));
+  } catch {
+    return [];
+  }
+}
 
 /**
  * @swagger
@@ -131,62 +70,32 @@ router.get("/models", requireAuth, async (req, res) => {
     const upstream = await axios.get(`${FAST_API_BASE}/models`, {
       params: req.query,
       validateStatus: () => true,
+      headers: authHeaders(req),
     });
 
   if (!(upstream.status >= 200 && upstream.status < 300) || !Array.isArray(upstream.data)) {
       return res.status(upstream.status).send(upstream.data);
     }
 
-  // If FastAPI returns an empty list (common when the upstream isn't configured to expose built-ins),
-  // merge in our baseline models so the UI still has something to show.
-  const upstreamList = upstream.data;
-  const combined = upstreamList.length === 0 ? AVAILABLE_MODELS : upstreamList;
+  let upstreamList = upstream.data;
 
-    await ensureIndexes();
-    const visible = await listVisibleModelIdsForUser({ userId: req.user.id, isAdmin: isAdmin(req) });
+  // If FastAPI returned empty, fall back to disk scan so uploaded/manual files appear.
+  if (!Array.isArray(upstreamList) || upstreamList.length === 0) {
+    upstreamList = await listDiskModels();
+  }
 
-    // If meta doesn't exist yet, treat as public (to avoid breaking existing baseline models).
-    // We'll only enforce private for models that have explicit meta.
-    const filtered = [];
-  for (const m of combined) {
-      if (!m?.id) continue;
-      const id = String(m.id);
-      if (visible.has(id)) {
-        filtered.push(m);
-        continue;
-      }
-
-      // allow through if no meta exists (legacy models)
-      // eslint-disable-next-line no-await-in-loop
-      const meta = await getModelMeta(id);
-      if (!meta) filtered.push(m);
-    }
-
-    return res.status(200).send(filtered);
+  // Return combined list directly (avoid DB filtering to ensure visibility even if Mongo is down).
+  return res.status(200).send(upstreamList);
   } catch (err) {
-    // Fallback to baseline models if FastAPI is down.
-    try {
-      await ensureIndexes();
-      const visible = await listVisibleModelIdsForUser({ userId: req.user.id, isAdmin: isAdmin(req) });
-      const filtered = [];
-      for (const m of AVAILABLE_MODELS) {
-        if (!m?.id) continue;
-        const id = String(m.id);
-        if (visible.has(id)) {
-          filtered.push(m);
-          continue;
-        }
-        // eslint-disable-next-line no-await-in-loop
-        const meta = await getModelMeta(id);
-        if (!meta) filtered.push(m);
-      }
-      return res.status(200).send(filtered);
-    } catch (e2) {
-      return res.status(502).json({
-        error: "FastAPI /models unavailable",
-        detail: err?.message || String(err),
-      });
+    // On error, fall back to disk models so UI can still show something.
+    const disk = await listDiskModels();
+    if (disk.length > 0) {
+      return res.status(200).send(disk);
     }
+    return res.status(502).json({
+      error: "FastAPI /models unavailable",
+      detail: err?.message || String(err),
+    });
   }
 });
 
@@ -217,6 +126,7 @@ router.get("/models/:id", async (req, res) => {
   try {
     const upstream = await axios.get(`${FAST_API_BASE}/models`, {
       validateStatus: () => true,
+      headers: authHeaders(req),
     });
     if (upstream.status >= 200 && upstream.status < 300 && Array.isArray(upstream.data)) {
       const found = upstream.data.find((m) => m.id === id);
@@ -227,9 +137,11 @@ router.get("/models/:id", async (req, res) => {
     // ignore and fallback below
   }
 
-  const model = AVAILABLE_MODELS.find((m) => m.id === id);
-  if (!model) return res.status(404).json({ error: "Model not found" });
-  res.json(model);
+  // Fallback to disk models
+  const disk = await listDiskModels();
+  const foundDisk = disk.find((m) => m.id === id);
+  if (foundDisk) return res.json(foundDisk);
+  return res.status(404).json({ error: "Model not found" });
 });
 
 /**
@@ -303,6 +215,7 @@ router.post("/models", requireAuth, async (req, res) => {
       const upstream = await axios.post(`${FAST_API_BASE}/models`, form, {
         headers: {
           ...form.getHeaders(),
+          ...authHeaders(req),
         },
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
@@ -372,6 +285,7 @@ router.delete("/models/:id", requireAuth, async (req, res) => {
   try {
     const upstream = await axios.delete(`${FAST_API_BASE}/models/${encodeURIComponent(id)}`, {
       validateStatus: () => true,
+      headers: authHeaders(req),
     });
     res.status(upstream.status).send(upstream.data);
   } catch (err) {
@@ -380,4 +294,3 @@ router.delete("/models/:id", requireAuth, async (req, res) => {
 });
 
 module.exports = router;
-

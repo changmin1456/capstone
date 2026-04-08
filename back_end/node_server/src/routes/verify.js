@@ -1,6 +1,7 @@
 // src/routes/verify.js
 const express = require("express");
 const axios = require("axios");
+const { authHeaders } = require("../utils/forwardAuth");
 
 const router = express.Router();
 const FAST_API_BASE = "http://127.0.0.1:8000";
@@ -27,6 +28,7 @@ router.get("/verify/scan", async (req, res) => {
 		const upstream = await axios.get(`${FAST_API_BASE}/verify/scan`, {
 			params: req.query,
 			validateStatus: () => true,
+			headers: authHeaders(req),
 		});
 		res.status(upstream.status).send(upstream.data);
 	} catch (err) {
@@ -40,4 +42,3 @@ router.get("/verify/scan", async (req, res) => {
 });
 
 module.exports = router;
-

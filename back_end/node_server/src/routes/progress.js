@@ -44,6 +44,35 @@ function mapDoc(doc) {
   return { id: _id.toString(), ...rest };
 }
 
+function normalizeLogs(logs) {
+  if (!Array.isArray(logs)) return logs;
+  return logs
+    .map((entry) => {
+      if (entry && typeof entry === "object") {
+        const line = typeof entry.line === "string" ? entry.line : (typeof entry.message === "string" ? entry.message : null);
+        if (line) {
+          return {
+            line,
+            run_id: entry.run_id,
+            t: entry.t,
+          };
+        }
+      }
+      return { line: String(entry) };
+    })
+    .filter((entry) => entry && typeof entry.line === "string" && entry.line.length);
+}
+
+function normalizeProgressDoc(doc) {
+  if (!doc || typeof doc !== "object") return doc;
+  const mapped = mapDoc(doc);
+  if (!mapped) return mapped;
+  if (mapped.logs) {
+    mapped.logs = normalizeLogs(mapped.logs);
+  }
+  return mapped;
+}
+
 /**
  * @swagger
  * /api/jobs/progress:
@@ -91,7 +120,7 @@ router.get("/jobs/progress", requireAuth, async (req, res) => {
       .sort({ created_at: -1 })
       .toArray();
 
-    res.json(docs.map(mapDoc));
+    res.json(docs.map(normalizeProgressDoc));
   } catch (err) {
     console.error("GET /api/jobs/progress error:", err.message);
     res.status(500).json({ error: "failed to fetch progress" });
@@ -127,10 +156,38 @@ router.get("/jobs/:id/progress", requireAuth, async (req, res) => {
     const db = getDb();
     const progressCol = db.collection(PROGRESS_COLLECTION);
 
-    const doc = await progressCol.findOne({ job_id: jobId }, { sort: { updated_at: -1, created_at: -1 } });
-    if (!doc) return res.status(404).json({ error: "progress not found", job_id: jobId });
+    let objectId = null;
+    try {
+      objectId = toObjectId(String(jobId));
+    } catch {
+      objectId = null;
+    }
 
-    return res.json(mapDoc(doc));
+    let doc = await progressCol.findOne({ job_id: jobId }, { sort: { updated_at: -1, created_at: -1 } });
+    if (objectId) {
+      const byId = await progressCol.findOne({ _id: objectId });
+      if (byId) {
+        if (!byId.job_id) {
+          await progressCol.updateOne({ _id: objectId }, { $set: { job_id: jobId } });
+          byId.job_id = jobId;
+        }
+        doc = byId;
+      } else if (!doc) {
+        doc = byId;
+      }
+    }
+    if (!doc) {
+      return res.json({
+        job_id: jobId,
+        status: "queued",
+        progress: 0.0,
+        epoch: 0,
+        total_epochs: 0,
+        logs: [],
+      });
+    }
+
+    return res.json(normalizeProgressDoc(doc));
   } catch (err) {
     console.error("GET /api/jobs/:id/progress error:", err.message);
     return res.status(500).json({ error: "failed to fetch progress" });
@@ -256,7 +313,10 @@ router.get("/jobs/:id/progress/stream", requireAuth, async (req, res) => {
   const pipeline = [
     {
       $match: {
-        "fullDocument.job_id": jobId,
+        $or: [
+          { "fullDocument.job_id": jobId },
+          ...(objectId ? [{ "fullDocument._id": objectId }] : []),
+        ],
       },
     },
   ];
@@ -292,6 +352,12 @@ router.get("/jobs/:id/progress/stream", requireAuth, async (req, res) => {
         loss: doc.loss ?? null,
         accuracy: doc.accuracy ?? null,
         status: doc.status ?? null,
+        logs: normalizeLogs(doc.logs) || [],
+        history: doc.history ?? null,
+        train_loss: doc.train_loss ?? null,
+        val_loss: doc.val_loss ?? null,
+        train_accuracy: doc.train_accuracy ?? null,
+        val_accuracy: doc.val_accuracy ?? null,
         created_at: doc.created_at,
         updated_at: doc.updated_at,
       };

@@ -1,9 +1,12 @@
 import Modal from "./Modal";
 import { API_BASE } from "../apis/api";
+import { getAuthToken } from "../utils/auth";
 import { useCallback, useEffect, useRef, useState } from "react";
 import JobDetailModal from "./JobDetailModal";
 import { readHttpErrorMessage } from "../utils/httpError";
 import { createPathFromPoints } from "../utils/simpleChart";
+import { useI18n } from "../i18n";
+import { useToast } from "./ToastProvider";
 
 type Props = {
   open: boolean;
@@ -38,6 +41,7 @@ export default function JobDashboardModal({
   onUpdated,
   hyperparams,
 }: Props) {
+  const { t } = useI18n();
   const [starting, setStarting] = useState(false);
   const [controlLoading, setControlLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -77,11 +81,31 @@ export default function JobDashboardModal({
     valLoss?: number[];
     trainAcc?: number[];
     valAcc?: number[];
+    map50?: number[];
+    map50_95?: number[];
+    precision?: number[];
+    recall?: number[];
     logs?: string[];
   }>({});
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const [expandedChart, setExpandedChart] = useState<{ label: string; data?: number[] } | null>(null);
   const [expandedHover, setExpandedHover] = useState<{ x: number; y: number; val: number; idx: number } | null>(null);
+  const [taskType, setTaskType] = useState<"detect" | "classify">("detect");
+  const [viewRunMode, setViewRunMode] = useState<"fresh" | "resume" | null>(null);
+  const runIdRef = useRef<string | null>(null);
+  const freshStartPendingRef = useRef(false);
+  const freshStartBaselineRunIdRef = useRef<string | null>(null);
+  const resetAtRef = useRef<number | null>(null);
+  const toastRef = useRef<{ jobId?: string; status?: string } | null>(null);
+  const { addToast } = useToast();
+  const authHeaders = (): Record<string, string> => {
+    const token = getAuthToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+  const fetchAuthed = (url: string, options: RequestInit = {}) => {
+    const headers: HeadersInit = { ...authHeaders(), ...(options.headers as HeadersInit | undefined) };
+    return fetch(url, { ...options, headers });
+  };
   const resetTransientUi = () => {
     setExpandedChart(null);
     setExpandedHover(null);
@@ -91,6 +115,8 @@ export default function JobDashboardModal({
     setDeploying(false);
     setXaiModalOpen(false);
     setXaiPanels(null);
+    setShowDetailModal(false);
+    setDetailModal({ open: false, loading: false });
   };
 
   useEffect(() => {
@@ -168,6 +194,14 @@ export default function JobDashboardModal({
     return normalize(url);
   }, []);
 
+  const withAuthToken = useCallback((url: string) => {
+    if (!url) return url;
+    const token = getAuthToken();
+    if (!token) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, []);
+
   const withCacheBust = useCallback((url: string, bust: number) => {
     if (!url) return url;
     const sep = url.includes("?") ? "&" : "?";
@@ -179,10 +213,10 @@ export default function JobDashboardModal({
     setXaiLoading(true);
     setXaiError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/jobs/${jobId}/xai/sources`);
+      const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/xai/sources`);
       const data = (await res.json()) as { sources?: XaiSource[]; error?: string };
       if (!res.ok) {
-        throw new Error(data?.error || "failed to load sources");
+        throw new Error(data?.error || t("jobDashboard.failedToLoadSources"));
       }
       const sources = Array.isArray(data.sources) ? data.sources : [];
       setXaiSources(sources);
@@ -191,11 +225,11 @@ export default function JobDashboardModal({
         sources[0]) as XaiSource | undefined;
       if (preferred?.key) setXaiSourceKey(preferred.key);
     } catch (e) {
-      setXaiError(sanitizeClientMessage((e as Error)?.message || "failed to load sources"));
+      setXaiError(sanitizeClientMessage((e as Error)?.message || t("jobDashboard.failedToLoadSources")));
     } finally {
       setXaiLoading(false);
     }
-  }, [jobId, sanitizeClientMessage, xaiSourceKey]);
+  }, [jobId, sanitizeClientMessage, t, xaiSourceKey]);
 
   const fetchXaiImages = useCallback(
     async (source: XaiSourceKey) => {
@@ -207,20 +241,20 @@ export default function JobDashboardModal({
       setXaiPanels(null);
       try {
         const qs = new URLSearchParams({ source, limit: "60" });
-        const res = await fetch(`${API_BASE}/api/jobs/${jobId}/xai/images?${qs.toString()}`);
+        const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/xai/images?${qs.toString()}`);
         const data = (await res.json()) as { items?: XaiImageItem[]; error?: string };
         if (!res.ok) {
-          throw new Error(data?.error || "failed to load images");
+          throw new Error(data?.error || t("jobDashboard.failedToLoadImages"));
         }
         const items = Array.isArray(data.items) ? data.items : [];
         setXaiImages(items);
       } catch (e) {
-        setXaiError(sanitizeClientMessage((e as Error)?.message || "failed to load images"));
+        setXaiError(sanitizeClientMessage((e as Error)?.message || t("jobDashboard.failedToLoadImages")));
       } finally {
         setXaiLoading(false);
       }
     },
-    [jobId, sanitizeClientMessage],
+    [jobId, sanitizeClientMessage, t],
   );
 
   const generateXai = useCallback(
@@ -246,7 +280,7 @@ export default function JobDashboardModal({
       setXaiPanels(null);
   setXaiCacheBust(bust);
       try {
-        const res = await fetch(`${API_BASE}/api/jobs/${jobId}/xai/generate`, {
+        const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/xai/generate`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ source, image_id }),
@@ -254,7 +288,7 @@ export default function JobDashboardModal({
         });
         const data = (await res.json()) as { panels?: XaiPanels; error?: string };
         if (!res.ok) {
-          throw new Error(data?.error || "failed to generate xai");
+          throw new Error(data?.error || t("jobDashboard.failedToGenerateXai"));
         }
         // Only apply if this is the latest request
         if (reqId === xaiReqSeqRef.current) {
@@ -264,14 +298,14 @@ export default function JobDashboardModal({
         // Ignore abort errors (they happen on rapid re-click)
         if ((e as any)?.name === "AbortError") return;
         if ((e as any)?.message?.includes?.("aborted")) return;
-        setXaiError(sanitizeClientMessage((e as Error)?.message || "failed to generate xai"));
+        setXaiError(sanitizeClientMessage((e as Error)?.message || t("jobDashboard.failedToGenerateXai")));
       } finally {
         if (reqId === xaiReqSeqRef.current) {
           setXaiLoading(false);
         }
       }
     },
-    [jobId, sanitizeClientMessage],
+    [jobId, sanitizeClientMessage, t],
   );
 
   useEffect(() => {
@@ -287,7 +321,7 @@ export default function JobDashboardModal({
     // 최신 하이퍼파라미터를 가져오기 위해 직전 job detail을 갱신
     if (jobId) {
       try {
-        const res = await fetch(`${API_BASE}/api/jobs/${jobId}/full`);
+        const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/full`);
         if (res.ok) {
           const data = (await res.json()) as JobFullDetail;
           jobDetailRef.current = data || ({} as JobFullDetail);
@@ -311,8 +345,11 @@ export default function JobDashboardModal({
       progressData.valAcc?.length ||
       epochs ||
       0;
-    const scoreVal = getLastVal(progressData.valAcc);
-    const statusVal = jobStatus || status || "Done";
+    const scoreVal =
+      taskType === "classify"
+        ? (getLastVal(progressData.valAcc) ?? getLastVal(progressData.trainAcc))
+        : getLastVal(progressData.map50);
+    const statusVal = normalizeLocalStatus(jobStatus || status);
 
     const rawSearchSpace =
       (jobDetailRef.current.search_space as Record<string, unknown> | undefined) ||
@@ -350,30 +387,48 @@ export default function JobDashboardModal({
         return Array.isArray(l) ? l : [l];
       }) ?? [];
 
+    const precisionVal = getLastVal(progressData.precision);
+    const recallVal = getLastVal(progressData.recall);
+    const f1Val =
+      typeof precisionVal === "number" && typeof recallVal === "number" && precisionVal + recallVal > 0
+        ? (2 * precisionVal * recallVal) / (precisionVal + recallVal)
+        : null;
     const record = {
       jobId,
+      job_id: jobId,
+      project_id: projectId,
       model,
       status: jobStatus,
+      task: taskType,
       trainingConfig: hyperSrc,
       dataset: {
         name: datasetName,
         path: datasetPath,
         epochs,
       },
-      metrics: {
-        map50: getLastVal(progressData.valAcc),
-        map50_95: getLastVal(progressData.trainAcc),
-        precision: getLastVal(progressData.valAcc),
-        recall: getLastVal(progressData.trainAcc),
-      },
+      metrics:
+        taskType === "classify"
+          ? {
+              acc: getLastVal(progressData.valAcc) ?? getLastVal(progressData.trainAcc),
+              precision: precisionVal,
+              recall: recallVal,
+              f1: f1Val,
+            }
+          : {
+              map50: getLastVal(progressData.map50),
+              map50_95: getLastVal(progressData.map50_95),
+              precision: precisionVal,
+              recall: recallVal,
+            },
       history: nextHistory,
       searchSpace: searchSpacePayload,
-      logs: progressData.logs?.length ? progressData.logs : logsFromProgress,
+      logs: serializeLogs(progressData.logs?.length ? progressData.logs : logsFromProgress),
+      hyperband_logs: buildHyperbandLines(),
       timestamp: new Date().toISOString(),
     };
     let dbId: string | undefined;
     try {
-      const res = await fetch(`${API_BASE}/api/experiments`, {
+      const res = await fetchAuthed(`${API_BASE}/api/experiments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(record),
@@ -384,7 +439,7 @@ export default function JobDashboardModal({
 
         // If history save succeeded, lock dataset changes for this job.
         if (jobId) {
-          void fetch(`${API_BASE}/api/jobs/${jobId}/lock-dataset`, { method: "POST" })
+          void fetchAuthed(`${API_BASE}/api/jobs/${jobId}/lock-dataset`, { method: "POST" })
             .then((r) => {
               if (!r.ok) {
                 console.warn("lock-dataset failed", r.status);
@@ -404,18 +459,18 @@ export default function JobDashboardModal({
     setDetailModal({ open: true, loading: true });
     const idToUse = dbId || jobId;
     if (!idToUse) {
-      setDetailModal({ open: true, loading: false, error: "record id missing" });
+      setDetailModal({ open: true, loading: false, error: t("jobDashboard.recordIdMissing") });
       return;
     }
     try {
       // 1) experiments에서 우선 조회
       let record: Record<string, unknown> | undefined;
-      let res = await fetch(`${API_BASE}/api/experiments/${idToUse}`);
+      let res = await fetchAuthed(`${API_BASE}/api/experiments/${idToUse}`);
       if (res.ok) {
         const data = (await res.json()) as Record<string, unknown>;
         record = data;
       } else if (res.status === 404 && jobId) {
-        const listRes = await fetch(`${API_BASE}/api/experiments?job_id=${jobId}`);
+        const listRes = await fetchAuthed(`${API_BASE}/api/experiments?job_id=${jobId}`);
         if (listRes.ok) {
           const list = (await listRes.json()) as Record<string, unknown>[];
           record = list[0];
@@ -426,7 +481,7 @@ export default function JobDashboardModal({
       let jobDetail: { job?: Record<string, unknown>; progress?: Record<string, unknown>[] } | undefined;
       if (jobId) {
         try {
-          const fullRes = await fetch(`${API_BASE}/api/jobs/${jobId}/full`);
+          const fullRes = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/full`);
           if (fullRes.ok) {
             jobDetail = (await fullRes.json()) as typeof jobDetail;
             jobDetailRef.current = jobDetail || ({} as JobFullDetail);
@@ -522,19 +577,32 @@ export default function JobDashboardModal({
         delete (merged.trainingConfig as any).dataset_path;
       }
 
+      const resolvedTaskRaw = (merged as any)?.task ?? (jobDoc as any)?.task ?? taskType;
+      const resolvedTask = typeof resolvedTaskRaw === "string" ? resolvedTaskRaw.toLowerCase() : taskType;
       // metrics 보강: progress 마지막 값으로 채우기
-      if (!merged.metrics || !(merged.metrics as any)?.map50) {
+      if (!merged.metrics || (resolvedTask === "classify" ? !(merged.metrics as any)?.acc : !(merged.metrics as any)?.map50)) {
         const lastProg = progressDocs?.length ? progressDocs[progressDocs.length - 1] : undefined;
-        const map50 = lastProg ? (lastProg as any).val_accuracy ?? (lastProg as any).accuracy : undefined;
-        const map5095 = lastProg ? (lastProg as any).train_accuracy : undefined;
-        const precision = map50;
-        const recall = map5095;
+        const map50 = lastProg ? (lastProg as any).map50 ?? (lastProg as any).val_accuracy ?? (lastProg as any).accuracy : undefined;
+        const map5095 = lastProg ? (lastProg as any).map50_95 ?? (lastProg as any).train_accuracy : undefined;
+        const precision = lastProg ? (lastProg as any).precision : undefined;
+        const recall = lastProg ? (lastProg as any).recall : undefined;
         merged.metrics = {
           ...(merged.metrics as Record<string, unknown> | undefined),
-          map50: (merged.metrics as any)?.map50 ?? map50 ?? getLastVal(progressData.valAcc),
-          map50_95: (merged.metrics as any)?.map50_95 ?? map5095 ?? getLastVal(progressData.trainAcc),
-          precision: (merged.metrics as any)?.precision ?? precision ?? getLastVal(progressData.valAcc),
-          recall: (merged.metrics as any)?.recall ?? recall ?? getLastVal(progressData.trainAcc),
+          ...(resolvedTask === "classify"
+            ? {
+                acc:
+                  (merged.metrics as any)?.acc ??
+                  getLastVal(progressData.valAcc) ??
+                  getLastVal(progressData.trainAcc),
+                precision: (merged.metrics as any)?.precision ?? precision ?? getLastVal(progressData.precision),
+                recall: (merged.metrics as any)?.recall ?? recall ?? getLastVal(progressData.recall),
+              }
+            : {
+                map50: (merged.metrics as any)?.map50 ?? map50 ?? getLastVal(progressData.map50),
+                map50_95: (merged.metrics as any)?.map50_95 ?? map5095 ?? getLastVal(progressData.map50_95),
+                precision: (merged.metrics as any)?.precision ?? precision ?? getLastVal(progressData.precision),
+                recall: (merged.metrics as any)?.recall ?? recall ?? getLastVal(progressData.recall),
+              }),
         };
       }
 
@@ -547,8 +615,8 @@ export default function JobDashboardModal({
             return Array.isArray(l) ? l : [l];
           }) ?? [];
         merged.logs =
-          (fromProg.length ? fromProg : undefined) ??
-          progressData.logs ??
+          (fromProg.length ? serializeLogs(fromProg) : undefined) ??
+          serializeLogs(progressData.logs ?? []) ??
           [];
       }
 
@@ -557,17 +625,17 @@ export default function JobDashboardModal({
       setDetailModal({
         open: true,
         loading: false,
-        error: e instanceof Error ? e.message : "failed to load record",
+        error: e instanceof Error ? e.message : t("jobDashboard.failedToLoadRecord"),
       });
     }
   };
 
   const handleDeleteExperiment = async (rowId: number, dbId?: string) => {
     // 순서는 삭제 외에는 유지: id는 재사용/재정렬하지 않음
-    if (!window.confirm("해당 기록을 삭제할까요? (DB 저장된 파일도 함께 삭제됩니다)")) return;
+    if (!window.confirm(t("jobDashboard.deleteHistoryConfirm"))) return;
     if (dbId) {
       try {
-        await fetch(`${API_BASE}/api/experiments/${dbId}`, { method: "DELETE" });
+        await fetchAuthed(`${API_BASE}/api/experiments/${dbId}`, { method: "DELETE" });
       } catch {
         // ignore network error, 어차피 로컬에서도 제거
       }
@@ -605,11 +673,74 @@ export default function JobDashboardModal({
     return current ? current.slice(-200) : [];
   };
 
-  const mergeLogs = (_current: string[] | undefined, incoming?: string[]) => {
-    if (incoming && incoming.length) {
-      return incoming.slice(-400); // 이전 로그와 합치지 않고 서버 응답으로 덮어씀
+  const shouldKeepLog = (line: string) => {
+    const t = line.trim();
+    if (!t) return false;
+    const lower = t.toLowerCase();
+    const hasEpoch = lower.includes("epoch") && /\d+\/\d+/.test(t);
+    const hasStep = /\b\d+\/\d+\b/.test(t);
+    const hasMetric = /loss|acc|map|precision|recall/i.test(t);
+    const hasError = lower.includes("error") || lower.includes("exception") || lower.includes("fail");
+    return hasEpoch || hasStep || hasMetric || hasError;
+  };
+
+  const stripAnsi = (line: string) => line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+
+  const normalizeLogs = (incoming?: string[]) =>
+    (incoming || [])
+      .map((l) => stripAnsi(String(l)))
+      .filter(shouldKeepLog)
+      .slice(-400);
+
+  const serializeLogs = (incoming?: unknown[]) => {
+    if (!Array.isArray(incoming)) return [];
+    return incoming
+      .map((entry) => {
+        if (entry && typeof entry === "object") {
+          const line = (entry as any).line ?? (entry as any).message;
+          if (typeof line === "string") return stripAnsi(line);
+        }
+        return stripAnsi(String(entry));
+      })
+      .filter((line) => typeof line === "string" && line.length);
+  };
+
+  const mergeLogs = (current: string[] | undefined, incoming?: string[]) => {
+    const filtered = normalizeLogs(incoming);
+    if (filtered.length) return filtered;
+    // incoming이 없으면 기존 로그 유지(일시정지/재개 시 사라지는 문제 방지)
+    return (current || []).slice(-400);
+  };
+
+  const buildHyperbandLines = () => {
+    const trainLoss = progressData.trainLoss || [];
+    const valLoss = progressData.valLoss || [];
+    const trainAcc = progressData.trainAcc || [];
+    const valAcc = progressData.valAcc || [];
+    const precision = progressData.precision || [];
+    const recall = progressData.recall || [];
+    const maxLen = Math.max(
+      trainLoss.length,
+      valLoss.length,
+      trainAcc.length,
+      valAcc.length,
+      precision.length,
+      recall.length,
+    );
+    if (maxLen === 0) return [];
+
+    const fmt = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? formatVal(v) : "—");
+    const hasAcc = trainAcc.length > 0 || valAcc.length > 0;
+    const lines: string[] = [];
+    for (let i = 0; i < maxLen; i += 1) {
+      const base = `epoch ${i + 1} | train_loss ${fmt(trainLoss[i])} | val_loss ${fmt(valLoss[i])}`;
+      if (taskType === "classify") {
+        lines.push(`${base} | train_acc ${fmt(trainAcc[i])} | val_acc ${fmt(valAcc[i])}`);
+      } else {
+        lines.push(`${base} | precision ${fmt(precision[i])} | recall ${fmt(recall[i])}`);
+      }
     }
-    return [];
+    return lines;
   };
 
   const isEmptyObj = (v: unknown) =>
@@ -618,9 +749,9 @@ export default function JobDashboardModal({
   const interpretError = (msg?: string) => {
     if (!msg) return null;
     const m = msg.toLowerCase();
-    if (m.includes("data.yaml not found")) return "데이터셋 경로에 data.yaml이 없습니다. 올바른 dataset_path를 지정하거나 data.yaml을 추가하세요.";
-    if (m.includes("file not found") || m.includes("no such file")) return "경로에 필요한 파일이 없습니다. dataset_path와 파일 구성을 확인하세요.";
-    if (m.includes("permission")) return "파일/폴더 권한 문제입니다. 읽기 권한을 확인하세요.";
+    if (m.includes("data.yaml not found")) return t("jobDashboard.datasetMissingDataYaml");
+    if (m.includes("file not found") || m.includes("no such file")) return t("jobDashboard.datasetFileMissing");
+    if (m.includes("permission")) return t("jobDashboard.datasetPermission");
     return msg;
   };
 
@@ -683,7 +814,7 @@ export default function JobDashboardModal({
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/api/experiments?job_id=${jobId}`);
+      const res = await fetchAuthed(`${API_BASE}/api/experiments?job_id=${jobId}`);
   if (!res.ok) throw new Error(await readHttpErrorMessage(res));
       const data = (await res.json()) as Array<Record<string, unknown>>;
       const toDateKey = (d: any): number => {
@@ -704,6 +835,11 @@ export default function JobDashboardModal({
           ?.map((d, idx) => {
             const trainingConfig = (d as any)?.trainingConfig || (d as any)?.hyperparams || {};
             const searchSpace = (d as any)?.searchSpace || (trainingConfig as any)?.search_space || {};
+            const task = typeof (d as any)?.task === "string" ? String((d as any).task).toLowerCase() : "";
+            const score =
+              task === "classify"
+                ? (d as any)?.metrics?.acc ?? (d as any)?.metrics?.accuracy ?? (d as any)?.score
+                : (d as any)?.metrics?.map50 ?? (d as any)?.score;
             const hyperStr = `lr0: ${((trainingConfig as any)?.lr ?? "—")}   batch: ${
               ((trainingConfig as any)?.batch_size ?? "—")
             }`;
@@ -715,7 +851,7 @@ export default function JobDashboardModal({
               dbId: typeof d.id === "string" ? d.id : undefined,
               hyper: hyperStr,
               epochs: (d.dataset as any)?.epochs ?? epochs ?? 0,
-              score: (d.metrics as any)?.map50 ?? (d as any)?.score ?? null,
+              score: score ?? null,
               status: String(d.status ?? "DONE"),
               date: (d as any)?.timestamp
                 ? String((d as any).timestamp).slice(0, 10)
@@ -746,10 +882,11 @@ export default function JobDashboardModal({
     };
 
     logs.forEach((line) => {
-      const tl = pickFirst(line, "train_loss");
-      const vl = pickFirst(line, "val_loss");
-      const ta = pickFirst(line, "train_acc");
-      const va = pickFirst(line, "val_acc");
+      const clean = stripAnsi(line);
+      const tl = pickFirst(clean, "train_loss");
+      const vl = pickFirst(clean, "val_loss");
+      const ta = pickFirst(clean, "train_acc");
+      const va = pickFirst(clean, "val_acc");
       if (tl !== undefined) trainLoss.push(tl);
       if (vl !== undefined) valLoss.push(vl);
       if (ta !== undefined) trainAcc.push(ta);
@@ -763,20 +900,52 @@ export default function JobDashboardModal({
     };
   };
 
+  const normalizeLogEntries = (
+    logsVal: unknown,
+    runId: string | null,
+  ): string[] => {
+    if (!Array.isArray(logsVal)) return [];
+    const rows = logsVal
+      .map((entry) => {
+        if (entry && typeof entry === "object") {
+          const line = (entry as any).line ?? (entry as any).message;
+          const entryRunId = typeof (entry as any).run_id === "string" ? (entry as any).run_id : null;
+          if (runId && entryRunId && entryRunId !== runId) return null;
+          if (typeof line === "string") return line;
+        }
+        if (typeof entry === "string") return entry;
+        return String(entry);
+      })
+      .filter((line): line is string => typeof line === "string" && line.length > 0);
+    return rows;
+  };
+
   const normalizeLocalStatus = (val?: string) => {
     const s = (val || "").toUpperCase();
     if (s === "RUNNING") return "RUNNING";
     if (s === "PAUSED" || s === "PAUSING") return "PAUSED";
-    if (s === "STOPPED") return "QUEUED"; // reset 이후 재시작 가능 상태로 취급
+    if (s === "STOPPED") return "STOPPED";
     if (s === "FAILED" || s === "ERROR" || s === "FAIL") return "FAILED";
     if (s === "DONE" || s === "SUCCESS" || s === "COMPLETED") return "DONE";
     if (s === "QUEUED" || s === "PENDING" || s === "STARTING") return "QUEUED";
     return "QUEUED";
   };
 
+  const toMs = (raw?: string | number | null) => {
+    if (!raw) return null;
+    if (typeof raw === "number") return raw > 1e12 ? raw : raw * 1000;
+    if (/^\d+$/.test(raw)) {
+      const num = Number(raw);
+      return num > 1e12 ? num : num * 1000;
+    }
+    const ts = Date.parse(raw);
+    return Number.isFinite(ts) ? ts : null;
+  };
+
   useEffect(() => {
     if (!open) return;
     setShowDetailModal(false);
+    setDetailModal({ open: false, loading: false });
     setError(null);
     setProgressData({});
     sseUnavailableRef.current = false;
@@ -786,16 +955,22 @@ export default function JobDashboardModal({
     setJobStatus(nextStatus);
     statusRef.current = nextStatus;
     completionRecordedRef.current = false;
+    setViewRunMode(null);
   }, [open, title, description, model, status, rawStatus]);
 
   useEffect(() => {
     if (!open || !jobId) return;
     const fetchDetail = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/jobs/${jobId}/full`);
+        const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/full`);
         if (!res.ok) return;
         const data = (await res.json()) as { job?: Record<string, unknown> };
         jobDetailRef.current = data || ({} as JobFullDetail);
+        const task = (data.job as any)?.task;
+        if (typeof task === "string") {
+          const t = task.toLowerCase();
+          if (t === "detect" || t === "classify") setTaskType(t);
+        }
       } catch {
         // ignore
       }
@@ -824,6 +999,20 @@ export default function JobDashboardModal({
   }, [jobStatus, progressData.valAcc, progressData.trainLoss, progressData.valLoss, progressData.trainAcc, epochs, open]);
 
   useEffect(() => {
+    if (!open || !jobId) return;
+    const normalized = normalizeLocalStatus(jobStatus || status);
+    const prev = toastRef.current;
+    if (prev?.jobId === jobId && prev?.status === normalized) return;
+    toastRef.current = { jobId, status: normalized };
+    if (normalized !== "DONE" && normalized !== "FAILED") return;
+    addToast({
+      title: normalized === "DONE" ? t("jobDashboard.toastDone") : t("jobDashboard.toastFailed"),
+      message: title || jobId,
+      variant: normalized === "DONE" ? "success" : "error",
+    });
+  }, [addToast, jobId, jobStatus, open, status, t, title]);
+
+  useEffect(() => {
     completionRecordedRef.current = false;
     void fetchHistory();
   }, [fetchHistory]);
@@ -849,7 +1038,7 @@ export default function JobDashboardModal({
     let cancelled = false;
     const poll = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+        const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}`);
         if (!res.ok) return;
         const data = await res.json();
         const prevStatus = statusRef.current;
@@ -863,19 +1052,13 @@ export default function JobDashboardModal({
           }
           onUpdated?.();
         }
-        if (!cancelled && next === "QUEUED") {
-          setProgressData({});
-          setProgressPct(null);
-          return;
-        }
-
         const progressUrl = `${API_BASE}/api/jobs/${jobId}/progress`;
         let progData: unknown;
         try {
-          const progRes = await fetch(progressUrl);
+          const progRes = await fetchAuthed(progressUrl);
           if (!progRes.ok) {
             if (!cancelled) {
-              setError(`progress 요청 실패 (${progRes.status})`);
+              setError(t("jobDashboard.progressFailed", { status: progRes.status }));
             }
             return;
           }
@@ -887,12 +1070,51 @@ export default function JobDashboardModal({
         if (progData) {
           const prog = Array.isArray(progData) ? progData[0] : progData;
           const progStatus = normalizeLocalStatus((prog as { status?: string }).status);
+          const runId = typeof (prog as any)?.run_id === "string" ? (prog as any).run_id : null;
+          const progUpdatedAt = toMs((prog as any)?.updated_at);
+          if (runId) runIdRef.current = runId;
           if ((prog as any)?.error_message) {
             setErrorReason(String((prog as any).error_message));
           } else if (progStatus !== "FAILED") {
             setErrorReason(null);
           }
-          if (progStatus === "QUEUED" || progStatus === "FAILED") {
+          const history = (prog as { history?: Record<string, unknown> }).history || {};
+          const metricsAll = Array.isArray((prog as any)?.metrics) ? (prog as any).metrics : [];
+          const logsVal = (prog as { logs?: unknown }).logs;
+          const hasLogs = Array.isArray(logsVal) ? logsVal.length > 0 : Boolean(logsVal);
+          const metrics =
+            runId
+              ? metricsAll.filter((m: any) => (m?.run_id || "legacy") === runId)
+              : metricsAll;
+          const hasMetrics = metrics.length > 0;
+          const hasHistory =
+            Array.isArray((history as any).train_loss) && (history as any).train_loss.length > 0 ||
+            Array.isArray((history as any).val_loss) && (history as any).val_loss.length > 0 ||
+            Array.isArray((history as any).train_accuracy) && (history as any).train_accuracy.length > 0 ||
+            Array.isArray((history as any).val_accuracy) && (history as any).val_accuracy.length > 0;
+          const hasSeries =
+            Array.isArray((prog as any).train_loss) && (prog as any).train_loss.length > 0 ||
+            Array.isArray((prog as any).val_loss) && (prog as any).val_loss.length > 0 ||
+            Array.isArray((prog as any).train_accuracy) && (prog as any).train_accuracy.length > 0 ||
+            Array.isArray((prog as any).val_accuracy) && (prog as any).val_accuracy.length > 0;
+          const hasProgress = typeof (prog as { progress?: unknown }).progress === "number" &&
+            (prog as { progress: number }).progress > 0;
+          const isEmptyProgress = !hasLogs && !hasMetrics && !hasHistory && !hasSeries && !hasProgress;
+          if (resetAtRef.current && progUpdatedAt && progUpdatedAt < resetAtRef.current) {
+            return;
+          }
+          if (viewRunMode === "fresh" && freshStartPendingRef.current) {
+            const baseRunId = freshStartBaselineRunIdRef.current;
+            const runIdChanged = Boolean(runId) && (!baseRunId || runId !== baseRunId);
+            const allowWithoutRunId = !runId && !isEmptyProgress && progStatus !== "QUEUED";
+            if (!runIdChanged && !allowWithoutRunId) {
+              return;
+            }
+            freshStartPendingRef.current = false;
+            resetAtRef.current = null;
+          }
+
+          if (progStatus === "QUEUED" && isEmptyProgress) {
             setProgressData({});
             setProgressPct(null);
             return;
@@ -909,22 +1131,28 @@ export default function JobDashboardModal({
             setProgressPct((prev) => (prev === null ? 0 : prev));
           }
 
-          const history = (prog as { history?: Record<string, unknown> }).history || {};
+          const metricVals = (key: string) =>
+            metrics
+              .map((m: any) => (typeof m?.[key] === "number" ? m[key] : undefined))
+              .filter((v: any): v is number => typeof v === "number" && Number.isFinite(v));
+          const metricsTrainLoss = metricVals("train_loss");
+          const metricsValLoss = metricVals("val_loss");
+          const metricsTrainAcc = metricVals("train_acc");
+          const metricsValAcc = metricVals("val_acc");
+          const metricsMap50 = metricVals("map50");
+          const metricsMap5095 = metricVals("map50_95");
+          const metricsPrecision = metricVals("precision");
+          const metricsRecall = metricVals("recall");
+
           const nextTrainLoss = toNumberSeries(
-            history.train_loss ?? prog?.train_loss ?? (prog as { loss?: unknown }).loss,
+            history.train_loss ?? prog?.train_loss ?? metricsTrainLoss ?? (prog as { loss?: unknown }).loss,
           );
-          const nextValLoss = toNumberSeries(history.val_loss ?? prog?.val_loss);
+          const nextValLoss = toNumberSeries(history.val_loss ?? prog?.val_loss ?? metricsValLoss);
           const nextTrainAcc = toNumberSeries(
-            history.train_accuracy ?? prog?.train_accuracy ?? (prog as { accuracy?: unknown }).accuracy,
+            history.train_accuracy ?? prog?.train_accuracy ?? metricsTrainAcc ?? (prog as { accuracy?: unknown }).accuracy,
           );
-          const nextValAcc = toNumberSeries(history.val_accuracy ?? prog?.val_accuracy);
-          const logsVal = (prog as { logs?: unknown }).logs;
-          const logs =
-            Array.isArray(logsVal) && logsVal.length
-              ? logsVal.map((l) => String(l))
-              : logsVal
-                ? [String(logsVal)]
-                : [];
+          const nextValAcc = toNumberSeries(history.val_accuracy ?? prog?.val_accuracy ?? metricsValAcc);
+          let logs = normalizeLogEntries(logsVal, runId);
           const parsedFromLogs = parseLogsToSeries(logs);
           const trainLossSeries =
             (parsedFromLogs.trainLoss && parsedFromLogs.trainLoss.length) ? parsedFromLogs.trainLoss : nextTrainLoss;
@@ -941,6 +1169,10 @@ export default function JobDashboardModal({
               valLoss: mergeSeries(prev.valLoss, valLossSeries),
               trainAcc: mergeSeries(prev.trainAcc, trainAccSeries),
               valAcc: mergeSeries(prev.valAcc, valAccSeries),
+              map50: mergeSeries(prev.map50, metricsMap50),
+              map50_95: mergeSeries(prev.map50_95, metricsMap5095),
+              precision: mergeSeries(prev.precision, metricsPrecision),
+              recall: mergeSeries(prev.recall, metricsRecall),
               logs: mergeLogs(prev.logs, logs),
             };
           });
@@ -1061,16 +1293,17 @@ export default function JobDashboardModal({
   }, [open, jobId, onUpdated]);
 
   const pauseMode: "pause" | "resume" = jobStatus === "PAUSED" ? "resume" : "pause";
-  const canStart = jobStatus === "QUEUED";
+  const canStart = ["QUEUED", "STOPPED", "FAILED", "DONE"].includes(jobStatus || "");
+  const canStop = jobStatus === "RUNNING";
   const canPause = jobStatus === "RUNNING";
   const canResume = jobStatus === "PAUSED";
-  const canReset = Boolean(jobId);
+  const canReset = Boolean(jobId) && jobStatus !== "RUNNING";
   const canEdit = jobStatus === "QUEUED" || jobStatus === "DONE";
 
   const updateStatus = async (next: string) => {
     if (!jobId) return;
     try {
-      await fetch(`${API_BASE}/api/jobs/${jobId}`, {
+      await fetchAuthed(`${API_BASE}/api/jobs/${jobId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: next }),
@@ -1080,26 +1313,21 @@ export default function JobDashboardModal({
     }
   };
 
-  const clearProgressOnServer = async () => {
-    if (!jobId) return;
-    try {
-      await fetch(`${API_BASE}/api/jobs/${jobId}/progress`, { method: "DELETE" });
-    } catch {
-      // ignore
-    }
-  };
-
   const handleStart = async () => {
     if (!jobId || !canStart) return;
     setStarting(true);
     setError(null);
     setProgressData({});
     setProgressPct(null);
+    setViewRunMode("fresh");
+    freshStartPendingRef.current = true;
+    freshStartBaselineRunIdRef.current = runIdRef.current;
+    resetAtRef.current = Date.now();
+    runIdRef.current = null;
     try {
-      await clearProgressOnServer();
-      const res = await fetch(`${API_BASE}/api/jobs/${jobId}/start`, { method: "POST" });
+      const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/start`, { method: "POST" });
       if (!res.ok) {
-  throw new Error(await readHttpErrorMessage(res));
+        throw new Error(await readHttpErrorMessage(res));
       }
       await updateStatus("running");
       onUpdated?.();
@@ -1107,7 +1335,7 @@ export default function JobDashboardModal({
       statusRef.current = "RUNNING";
       setProgressPct(0);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "실행에 실패했습니다.");
+      setError(e instanceof Error ? e.message : t("jobDashboard.startFailed"));
     } finally {
       setStarting(false);
     }
@@ -1118,7 +1346,7 @@ export default function JobDashboardModal({
     setControlLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/jobs/${jobId}/pause`, { method: "POST" });
+      const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/pause`, { method: "POST" });
       if (!res.ok) {
   throw new Error(await readHttpErrorMessage(res));
       }
@@ -1127,7 +1355,7 @@ export default function JobDashboardModal({
       await updateStatus("paused"); // backend start 허용 상태 유지
       onUpdated?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "일시정지에 실패했습니다.");
+      setError(e instanceof Error ? e.message : t("jobDashboard.pauseFailed"));
     } finally {
       setControlLoading(false);
     }
@@ -1137,8 +1365,9 @@ export default function JobDashboardModal({
     if (!jobId || !canResume) return;
     setControlLoading(true);
     setError(null);
+    setViewRunMode("resume");
     try {
-      const res = await fetch(`${API_BASE}/api/jobs/${jobId}/resume`, { method: "POST" });
+      const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/resume`, { method: "POST" });
       if (!res.ok) {
   throw new Error(await readHttpErrorMessage(res));
       }
@@ -1147,30 +1376,55 @@ export default function JobDashboardModal({
       await updateStatus("running");
       onUpdated?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "재개에 실패했습니다.");
+      setError(e instanceof Error ? e.message : t("jobDashboard.resumeFailed"));
     } finally {
       setControlLoading(false);
     }
   };
 
   const handleStop = async () => {
-    if (!jobId || !canReset) return;
+    if (!jobId || !canStop) return;
     setControlLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/jobs/${jobId}/reset`, { method: "POST" });
+      const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/stop`, { method: "POST" });
       if (!res.ok) {
   throw new Error(await readHttpErrorMessage(res));
+      }
+      setJobStatus("STOPPED");
+      statusRef.current = "STOPPED";
+      await updateStatus("stopped");
+      onUpdated?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("jobDashboard.stopFailed"));
+    } finally {
+      setControlLoading(false);
+    }
+  };
+
+  const handleReset = async () => {
+    if (!jobId || !canReset) return;
+    setControlLoading(true);
+    setError(null);
+    resetAtRef.current = Date.now();
+    runIdRef.current = null;
+    freshStartBaselineRunIdRef.current = null;
+    freshStartPendingRef.current = true;
+    setViewRunMode("fresh");
+    try {
+      const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/reset`, { method: "POST" });
+      if (!res.ok) {
+        throw new Error(await readHttpErrorMessage(res));
       }
       setJobStatus("QUEUED");
       statusRef.current = "QUEUED";
       await updateStatus("queued");
-      await clearProgressOnServer();
       setProgressData({});
       setProgressPct(null);
+      setViewRunMode(null);
       onUpdated?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "중단에 실패했습니다.");
+      setError(e instanceof Error ? e.message : t("jobDashboard.resetFailed"));
     } finally {
       setControlLoading(false);
     }
@@ -1178,19 +1432,19 @@ export default function JobDashboardModal({
 
   const handleDelete = async () => {
     if (!jobId) return;
-    const ok = window.confirm("이 Job을 삭제(중단)할까요?");
+    const ok = window.confirm(t("jobDashboard.deleteJobConfirm"));
     if (!ok) return;
     setDeleteLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/jobs/${jobId}?force=true`, { method: "DELETE" });
+      const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}?force=true`, { method: "DELETE" });
       if (!res.ok) {
   throw new Error(await readHttpErrorMessage(res));
       }
       onUpdated?.();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "중단에 실패했습니다.");
+      setError(e instanceof Error ? e.message : t("jobDashboard.deleteJobFailed"));
     } finally {
       setDeleteLoading(false);
     }
@@ -1198,7 +1452,7 @@ export default function JobDashboardModal({
 
   const sanitizeDeployErrorMessage = (raw: unknown): string => {
     const s = typeof raw === "string" ? raw : raw == null ? "" : String(raw);
-    if (!s.trim()) return "처리에 실패했습니다.";
+    if (!s.trim()) return t("jobDashboard.processFailed");
 
     let out = s;
 
@@ -1226,7 +1480,7 @@ export default function JobDashboardModal({
 
     // 공백 정리
     out = out.replace(/\s{2,}/g, " ").trim();
-    return out || "처리에 실패했습니다.";
+    return out || t("jobDashboard.processFailed");
   };
 
   const handleDeploy = async () => {
@@ -1238,13 +1492,15 @@ export default function JobDashboardModal({
   const qs = new URLSearchParams();
   if (deployTarget) qs.set("target", deployTarget);
   if (deployOutputName.trim()) qs.set("output_name", deployOutputName.trim());
-  const res = await fetch(`${API_BASE}/api/jobs/${jobId}/deploy?${qs.toString()}`, { method: "POST" });
+  const res = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}/deploy?${qs.toString()}`, { method: "POST" });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         const detail = (data as { detail?: unknown } | null)?.detail;
-        throw new Error(typeof detail === "string" ? detail : `(${res.status}) Deploy request failed`);
+        throw new Error(
+          typeof detail === "string" ? detail : `${t("jobDashboard.deployRequestFailed")} (${res.status})`,
+        );
       }
-      const msg = ((data as any)?.deploy?.message as string | undefined) || "배포 변환이 시작되었습니다.";
+      const msg = ((data as any)?.deploy?.message as string | undefined) || t("jobDashboard.deploySuccess");
 
       // 우선 요청 접수 메시지 표시
   setDeployMessage(sanitizeDeployErrorMessage(msg));
@@ -1262,7 +1518,7 @@ export default function JobDashboardModal({
         outputPath?: string;
       } | null> => {
         try {
-          const jres = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+          const jres = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}`);
           if (!jres.ok) return null;
           const j = (await jres.json().catch(() => null)) as any;
           const deploy = j?.deploy;
@@ -1286,7 +1542,7 @@ export default function JobDashboardModal({
       const pollLoop = async () => {
         while (true) {
           if (Date.now() - startedAt > timeoutMs) {
-            setDeployMessage((prev) => prev || "변환이 진행 중입니다. (상태 확인 시간 초과)");
+            setDeployMessage((prev) => prev || t("jobDashboard.deployInProgressTimeout"));
             return;
           }
           // 모달이 닫혔거나 jobId가 사라지면 중단
@@ -1296,12 +1552,12 @@ export default function JobDashboardModal({
           const st = info?.status;
 
           if (st === "completed") {
-            setDeployMessage(sanitizeDeployErrorMessage(info?.message || "변환이 완료되었습니다."));
+            setDeployMessage(sanitizeDeployErrorMessage(info?.message || t("jobDashboard.deployCompleted")));
             setDeployStatus("success");
             return;
           }
           if (st === "failed") {
-            setDeployMessage(sanitizeDeployErrorMessage(info?.message || "변환에 실패했습니다."));
+            setDeployMessage(sanitizeDeployErrorMessage(info?.message || t("jobDashboard.deployFailedMessage")));
             setDeployStatus("error");
             return;
           }
@@ -1313,7 +1569,7 @@ export default function JobDashboardModal({
       void pollLoop();
     } catch (e) {
       setDeployMessage(
-        sanitizeDeployErrorMessage(e instanceof Error ? e.message : "배포 요청 중 오류가 발생했습니다."),
+        sanitizeDeployErrorMessage(e instanceof Error ? e.message : t("jobDashboard.deployRequestFailed")),
       );
       setDeployStatus("error");
     } finally {
@@ -1328,20 +1584,22 @@ export default function JobDashboardModal({
     if (!jobId) return;
     try {
   const cmd = `open /Users/changmin/Projects/capston/back_end/saved_models/deploy`;
-      const res = await fetch(`${API_BASE}/api/terminal`, {
+      const res = await fetchAuthed(`${API_BASE}/api/terminal`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ cmd }),
       });
       if (!res.ok) {
-  setDeployMessage(`폴더 열기 실패: ${sanitizeDeployErrorMessage(await readHttpErrorMessage(res))}`);
+      setDeployMessage(
+        t("jobDashboard.openFolderFailed", { reason: sanitizeDeployErrorMessage(await readHttpErrorMessage(res)) }),
+      );
         setDeployStatus("error");
         return;
       }
-      setDeployMessage("폴더를 열었습니다.");
+      setDeployMessage(t("jobDashboard.openFolderSuccess"));
       setDeployStatus("idle");
     } catch {
-      setDeployMessage("폴더 열기 요청 중 오류가 발생했습니다.");
+      setDeployMessage(t("jobDashboard.openFolderError"));
       setDeployStatus("error");
     }
   };
@@ -1367,7 +1625,7 @@ export default function JobDashboardModal({
     if (!data || data.length === 0) {
       return (
         <div className="h-[160px] rounded-lg border border-white/5 bg-black/30 flex items-center justify-center text-xs text-white/35">
-          데이터 없음
+          {t("common.noData")}
         </div>
       );
     }
@@ -1421,8 +1679,8 @@ export default function JobDashboardModal({
         <div className="flex-1">
           <svg viewBox={`0 0 ${w} ${h}`} className="h-full w-full">
             {/* axes */}
-            <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="rgba(255,255,255,0.18)" strokeWidth="1" />
-            <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="rgba(255,255,255,0.18)" strokeWidth="1" />
+            <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="rgb(var(--theme-chart-grid) / 0.18)" strokeWidth="1" />
+            <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="rgb(var(--theme-chart-grid) / 0.18)" strokeWidth="1" />
             {yTicks.map((v, idx) => (
               <g key={`y-${idx}`}>
                 <line
@@ -1430,14 +1688,14 @@ export default function JobDashboardModal({
                   x2={pad}
                   y1={mapY(v)}
                   y2={mapY(v)}
-                  stroke="rgba(255,255,255,0.35)"
+                  stroke="rgb(var(--theme-chart-grid) / 0.35)"
                   strokeWidth="1"
                 />
                 <text
                   x={pad - 6}
                   y={mapY(v) + 3}
                   fontSize="9"
-                  fill="rgba(255,255,255,0.6)"
+                  fill="rgb(var(--theme-chart-text) / 0.7)"
                   textAnchor="end"
                 >
                   {formatVal(v)}
@@ -1451,14 +1709,14 @@ export default function JobDashboardModal({
       x2={mapXTicks(idx)}
                   y1={h - pad}
                   y2={h - pad + 4}
-                  stroke="rgba(255,255,255,0.35)"
+                  stroke="rgb(var(--theme-chart-grid) / 0.35)"
                   strokeWidth="1"
                 />
                 <text
       x={mapXTicks(idx)}
                   y={h - pad + 12}
                   fontSize="9"
-                  fill="rgba(255,255,255,0.6)"
+                  fill="rgb(var(--theme-chart-text) / 0.7)"
                   textAnchor="middle"
                 >
                   {i + 1}
@@ -1476,7 +1734,7 @@ export default function JobDashboardModal({
 
   const renderExpandedChart = (label: string, data?: number[]) => {
     if (!data || !data.length) {
-      return <div className="text-white/50 text-sm">데이터 없음</div>;
+      return <div className="text-white/50 text-sm">{t("common.noData")}</div>;
     }
     const minVal = Math.min(...data);
     const maxVal = Math.max(...data);
@@ -1490,10 +1748,10 @@ export default function JobDashboardModal({
           const [xStr, yStr] = path.split(",");
           const x = Number.parseFloat(xStr) || w / 2;
           const y = Number.parseFloat(yStr) || h / 2;
-          return <circle cx={x} cy={y} r={6} fill="#f97316" />;
+          return <circle cx={x} cy={y} r={6} fill="#3b82f6" />;
         })()
       ) : (
-        <polyline points={path} fill="none" stroke="#f97316" strokeWidth="3" />
+        <polyline points={path} fill="none" stroke="#3b82f6" strokeWidth="3" />
       );
     const mapY = (v: number) => {
       const rng = Math.max(maxVal - minVal, 1e-9);
@@ -1529,7 +1787,7 @@ export default function JobDashboardModal({
       return pad + tickIdx * sx;
     };
     return (
-      <div className="rounded-2xl border border-white/10 bg-[#0c1020] px-6 py-5 shadow-2xl w-[760px] max-w-[96vw]">
+      <div className="rounded-2xl border border-white/10 bg-[rgb(var(--theme-panel-strong))] px-6 py-5 shadow-2xl w-[760px] max-w-[96vw]">
         <div className="flex items-center justify-between mb-3">
           <div className="text-sm font-semibold tracking-[0.14em] text-white/70">{label.toUpperCase()}</div>
           <button
@@ -1540,21 +1798,21 @@ export default function JobDashboardModal({
             ×
           </button>
         </div>
-        <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[360px]">
-          <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="rgba(255,255,255,0.16)" strokeWidth="1" />
-          <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="rgba(255,255,255,0.16)" strokeWidth="1" />
+        <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[360px] overflow-visible">
+          <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="rgb(var(--theme-chart-grid) / 0.18)" strokeWidth="1" />
+          <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="rgb(var(--theme-chart-grid) / 0.18)" strokeWidth="1" />
           {yTicks.map((v, idx) => (
             <g key={`exp-y-${idx}`}>
-              <line x1={pad - 6} x2={pad} y1={mapY(v)} y2={mapY(v)} stroke="rgba(255,255,255,0.35)" />
-              <text x={pad - 12} y={mapY(v) + 5} fontSize="12" fill="rgba(255,255,255,0.8)" textAnchor="end">
+              <line x1={pad - 6} x2={pad} y1={mapY(v)} y2={mapY(v)} stroke="rgb(var(--theme-chart-grid) / 0.35)" />
+              <text x={pad - 12} y={mapY(v) + 5} fontSize="12" fill="rgb(var(--theme-chart-text) / 0.8)" textAnchor="end">
                 {formatVal(v)}
               </text>
             </g>
           ))}
           {xTicks.map((i, idx) => (
             <g key={`exp-x-${idx}`}>
-              <line x1={mapXTicks(idx)} x2={mapXTicks(idx)} y1={h - pad} y2={h - pad + 6} stroke="rgba(255,255,255,0.35)" />
-              <text x={mapXTicks(idx)} y={h - pad + 18} fontSize="12" fill="rgba(255,255,255,0.8)" textAnchor="middle">
+              <line x1={mapXTicks(idx)} x2={mapXTicks(idx)} y1={h - pad} y2={h - pad + 6} stroke="rgb(var(--theme-chart-grid) / 0.35)" />
+              <text x={mapXTicks(idx)} y={h - pad + 18} fontSize="12" fill="rgb(var(--theme-chart-text) / 0.8)" textAnchor="middle">
                 {i + 1}
               </text>
             </g>
@@ -1570,7 +1828,7 @@ export default function JobDashboardModal({
                   cy={cy}
                   r={3}
                   fill="#0c1020"
-                  stroke="#f97316"
+                  stroke="#3b82f6"
                   strokeWidth={1.5}
                   onMouseEnter={() => setExpandedHover({ x: cx, y: cy, val: v, idx })}
                   onMouseLeave={() => setExpandedHover(null)}
@@ -1588,10 +1846,10 @@ export default function JobDashboardModal({
                 rx={7}
                 ry={7}
                 fill="rgba(17,24,39,0.92)"
-                stroke="#f97316"
+                stroke="#3b82f6"
                 strokeWidth={1.1}
               />
-              <text x={0} y={-10} fill="#f97316" fontSize="12" textAnchor="middle" dominantBaseline="middle">
+              <text x={0} y={-10} fill="#3b82f6" fontSize="12" textAnchor="middle" dominantBaseline="middle">
                 {`${expandedHover.idx + 1} : ${formatVal(expandedHover.val)}`}
               </text>
             </g>
@@ -1600,12 +1858,27 @@ export default function JobDashboardModal({
       </div>
     );
   };
-  const metricCards = [
-    { label: "MAP50", value: getLastVal(progressData.valAcc) },
-    { label: "MAP50-95", value: getLastVal(progressData.trainAcc) },
-    { label: "PRECISION", value: getLastVal(progressData.valAcc) },
-    { label: "RECALL", value: getLastVal(progressData.trainAcc) },
-  ];
+  const lastPrecision = getLastVal(progressData.precision);
+  const lastRecall = getLastVal(progressData.recall);
+  const lastAcc = getLastVal(progressData.valAcc) ?? getLastVal(progressData.trainAcc);
+  const f1Score =
+    typeof lastPrecision === "number" && typeof lastRecall === "number" && lastPrecision + lastRecall > 0
+      ? (2 * lastPrecision * lastRecall) / (lastPrecision + lastRecall)
+      : null;
+  const metricCards =
+    taskType === "classify"
+      ? [
+          { label: t("jobDashboard.metrics.acc"), value: lastAcc },
+          { label: t("jobDashboard.metrics.precision"), value: lastPrecision },
+          { label: t("jobDashboard.metrics.recall"), value: lastRecall },
+          { label: t("jobDashboard.metrics.f1"), value: f1Score },
+        ]
+      : [
+          { label: t("jobDashboard.metrics.map50"), value: getLastVal(progressData.map50) },
+          { label: t("jobDashboard.metrics.map95"), value: getLastVal(progressData.map50_95) },
+          { label: t("jobDashboard.metrics.precision"), value: lastPrecision },
+          { label: t("jobDashboard.metrics.recall"), value: lastRecall },
+        ];
   const bestParams = [
     { label: "lr0", value: bestHyper?.lr ?? "—" },
     { label: "batch", value: bestHyper?.batch ?? "—" },
@@ -1618,61 +1891,86 @@ export default function JobDashboardModal({
     FAILED: "text-rose-300",
     QUEUED: "text-emerald-300",
     PAUSED: "text-amber-200",
+    STOPPED: "text-amber-200",
   };
   const statusText = normalizeLocalStatus(jobStatus || status);
+  const formatStatusLabel = (value?: string) => {
+    const s = (value || "").toUpperCase();
+    if (s === "RUNNING") return t("jobDashboard.statusRunning");
+    if (s === "PAUSED") return t("jobDashboard.statusPaused");
+    if (s === "STOPPED") return t("jobDashboard.statusStopped");
+    if (s === "FAILED") return t("jobDashboard.statusFailed");
+    if (s === "DONE") return t("jobDashboard.statusDone");
+    if (s === "QUEUED") return t("jobDashboard.statusQueued");
+    return value || t("jobDashboard.statusDone");
+  };
+  const statusLabel = formatStatusLabel(statusText);
   const pctLabel =
     statusText === "RUNNING" && typeof progressPct === "number"
       ? `${progressPct.toFixed(0)}%`
-      : statusText;
+      : statusLabel;
   const canUseDeployActions = historyRows.length > 0 || statusText === "DONE";
 
   return (
-  <Modal open={open} title="Training Dashboard" onClose={onClose} size="5xl">
+  <Modal open={open} title={t("jobDashboard.title")} onClose={onClose} size="5xl">
       <div className="space-y-4 max-h-[calc(100vh-8rem)] overflow-y-auto pr-1 no-scrollbar">
         {error && (
-          <div className="rounded-xl border border-rose-400/50 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+          <div className="rounded-xl border border-rose-400/50 bg-rose-500/10 px-4 py-3 text-sm text-black">
             {error}
           </div>
         )}
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <div className="text-lg font-bold text-white/90">{title || "Job"}</div>
+            <div className="text-lg font-bold text-white/90">{title || t("jobDashboard.job")}</div>
             {description && <div className="text-sm text-white/65">{description}</div>}
-            <div className="text-sm text-white/60">{model || "model"}</div>
-            <div className="text-xs text-white/45">trainId: {jobId || "—"}</div>
+            <div className="text-sm text-white/60">{model || t("jobDashboard.model")}</div>
+            <div className="text-xs text-white/45">
+              {t("jobDashboard.trainId")}: {jobId || "—"}
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 justify-end sm:self-end sm:mt-0 mt-1">
             <button
               type="button"
               onClick={() => setShowDetailModal(true)}
-              className="h-10 rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/10"
+              className="h-10 rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-[rgb(var(--theme-btn-text))] transition hover:border-white/20 hover:bg-white/10 disabled:opacity-50"
             >
-              Detail
+              {t("jobDashboard.detail")}
             </button>
-            <button
-              type="button"
-              onClick={handleStart}
-              disabled={starting || !jobId || !canStart}
-              className="h-10 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50"
-            >
-              {starting ? "Starting..." : "Start"}
-            </button>
+            {canStop ? (
+              <button
+                type="button"
+                onClick={handleStop}
+                disabled={controlLoading || !jobId || !canStop}
+                className="h-10 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 text-sm font-semibold text-[rgb(var(--theme-btn-text))] transition hover:border-rose-300/80 hover:bg-rose-500/25 disabled:opacity-50"
+              >
+                {t("jobDashboard.stop")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStart}
+                disabled={starting || !jobId || !canStart}
+                className="h-10 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-[rgb(var(--theme-btn-text))] transition hover:bg-blue-500 disabled:opacity-50"
+              >
+                {starting ? t("common.loading") : t("jobDashboard.start")}
+              </button>
+            )}
             <button
               type="button"
               onClick={pauseMode === "pause" ? handlePause : handleResume}
               disabled={controlLoading || !jobId || (!canPause && !canResume)}
-              className="h-10 w-24 rounded-xl border border-amber-300/40 bg-amber-400/10 px-4 text-sm font-semibold text-amber-100 transition hover:border-amber-300/60 hover:bg-amber-400/20 disabled:opacity-50"
+              className="h-10 w-24 rounded-xl border border-amber-300/40 bg-amber-400/10 px-4 text-sm font-semibold text-[rgb(var(--theme-btn-text))] transition hover:border-amber-300/60 hover:bg-amber-400/20 disabled:opacity-50"
             >
-              {pauseMode === "pause" ? "Pause" : "Resume"}
+              {pauseMode === "pause" ? t("jobDashboard.pause") : t("jobDashboard.resume")}
             </button>
             <button
               type="button"
-              onClick={handleStop}
+              onClick={handleReset}
               disabled={controlLoading || !jobId || !canReset}
-              className="h-10 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 text-sm font-semibold text-rose-100 transition hover:border-rose-300/80 hover:bg-rose-500/25 disabled:opacity-50"
+              className="h-10 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 text-sm font-semibold text-rose-500 transition hover:border-rose-300/80 hover:bg-rose-500/25 disabled:opacity-50"
             >
-              Reset
+              {t("jobDashboard.reset")}
             </button>
           </div>
         </div>
@@ -1693,12 +1991,12 @@ export default function JobDashboardModal({
         />
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr] items-start">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 auto-rows-[220px]">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 auto-rows-[220px]">
             <div
               className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
               onClick={() => setExpandedChart({ label: "TRAIN_LOSS", data: progressData.trainLoss })}
             >
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/50 mb-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70 mb-2">
                 TRAIN_LOSS
               </div>
               {renderChart("train_loss", progressData.trainLoss)}
@@ -1707,51 +2005,76 @@ export default function JobDashboardModal({
               className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
               onClick={() => setExpandedChart({ label: "VAL_LOSS", data: progressData.valLoss })}
             >
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/50 mb-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70 mb-2">
                 VAL_LOSS
               </div>
               {renderChart("val_loss", progressData.valLoss)}
             </div>
-            <div
-              className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
-              onClick={() => setExpandedChart({ label: "TRAIN_ACC", data: progressData.trainAcc })}
-            >
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/50 mb-2">
-                TRAIN_ACC
-              </div>
-              {renderChart("train_acc", progressData.trainAcc)}
-            </div>
-            <div
-              className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
-              onClick={() => setExpandedChart({ label: "VAL_ACC", data: progressData.valAcc })}
-            >
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/50 mb-2">
-                VAL_ACC
-              </div>
-              {renderChart("val_acc", progressData.valAcc)}
-            </div>
+            {taskType === "classify" ? (
+              <>
+                <div
+                  className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
+                  onClick={() => setExpandedChart({ label: "TRAIN_ACC", data: progressData.trainAcc })}
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70 mb-2">
+                    TRAIN_ACC
+                  </div>
+                  {renderChart("train_acc", progressData.trainAcc)}
+                </div>
+                <div
+                  className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
+                  onClick={() => setExpandedChart({ label: "VAL_ACC", data: progressData.valAcc })}
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70 mb-2">
+                    VAL_ACC
+                  </div>
+                  {renderChart("val_acc", progressData.valAcc)}
+                </div>
+              </>
+            ) : (
+              <>
+                <div
+                  className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
+                  onClick={() => setExpandedChart({ label: "PRECISION", data: progressData.precision })}
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70 mb-2">
+                    PRECISION
+                  </div>
+                  {renderChart("precision", progressData.precision)}
+                </div>
+                <div
+                  className="h-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 cursor-zoom-in hover:border-white/20 transition"
+                  onClick={() => setExpandedChart({ label: "RECALL", data: progressData.recall })}
+                >
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70 mb-2">
+                    RECALL
+                  </div>
+                  {renderChart("recall", progressData.recall)}
+                </div>
+              </>
+            )}
           </div>
 
-          <div className="rounded-xl border border-white/10 bg-black/20 p-4 flex flex-col h-full lg:h-[460px] max-h-[460px] self-start">
-            <div className="text-sm font-semibold text-white/80 mb-2">Hyperband Logs</div>
+          <div className="rounded-xl border border-white/10 bg-black/20 p-4 flex flex-col self-start h-auto lg:h-[calc(2*220px+1rem)]">
+            <div className="text-sm font-semibold text-white/80 mb-2">{t("jobDashboard.hyperbandLogs")}</div>
             {jobStatus === "FAILED" && errorReason && (
               <div className="mb-2 rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-                <div className="font-semibold mb-1">Error</div>
+                <div className="font-semibold mb-1">{t("common.error")}</div>
                 <div>{interpretError(errorReason)}</div>
               </div>
             )}
             <div
               ref={logContainerRef}
-              className="flex-1 rounded-lg border border-white/5 bg-black/30 p-3 text-sm text-white/60 space-y-1 overflow-y-auto"
+              className="flex-1 min-h-0 rounded-lg border border-white/5 bg-black/30 p-3 text-xs font-mono text-white/80 space-y-1 overflow-y-auto whitespace-pre-line break-words leading-relaxed"
             >
-              {progressData.logs && progressData.logs.length > 0 ? (
-                progressData.logs.slice(-100).map((line, idx) => (
-                  <div key={`${idx}-${line}`} className="whitespace-pre-wrap">
+            {buildHyperbandLines().length > 0 ? (
+                buildHyperbandLines().slice(-100).map((line, idx) => (
+                  <div key={`${idx}-${line}`}>
                     {line}
                   </div>
                 ))
               ) : (
-                <div className="text-white/40">로그가 아직 없습니다.</div>
+                <div className="text-white/60">{t("jobDashboard.logsEmpty")}</div>
               )}
             </div>
           </div>
@@ -1773,7 +2096,7 @@ export default function JobDashboardModal({
           ))}
           <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-center">
             <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/60">
-              Status
+              {t("jobDashboard.metrics.status")}
             </div>
             <div className={`mt-1 text-2xl font-extrabold ${statusColors[statusText] || "text-white"}`}>
               {pctLabel}
@@ -1785,7 +2108,7 @@ export default function JobDashboardModal({
           <div className="rounded-2xl border border-white/10 bg-gradient-to-r from-slate-800/70 to-slate-900/80 p-4">
             <div className="flex items-center gap-2 text-sky-200 font-semibold text-sm">
               <span className="text-lg">🏆</span>
-              Best Hyperparameters
+              {t("jobDashboard.bestHyper")}
             </div>
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
               {bestParams.map((p) => (
@@ -1804,34 +2127,34 @@ export default function JobDashboardModal({
             <div className="flex items-center justify-between text-white/80 font-semibold text-sm mb-3">
               <div className="flex items-center gap-2">
                 <span className="text-lg">⏱️</span>
-                Experiment History
+                {t("jobDashboard.experimentHistory")}
               </div>
               <button
                 type="button"
                 onClick={handleSaveExperiment}
                 className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/80 hover:border-white/30 hover:bg-white/10 transition"
               >
-                Save
+                {t("jobDashboard.save")}
               </button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm text-white/80">
                 <thead className="text-white/60 border-b border-white/10">
                   <tr>
-                    <th className="py-2 px-2">Trial ID</th>
-                    <th className="py-2 px-2">Hyperparameters</th>
-                    <th className="py-2 px-2">Epochs</th>
-                    <th className="py-2 px-2">Score </th>
-                    <th className="py-2 px-2">Status</th>
-                    <th className="py-2 px-2">Date</th>
-                    <th className="py-2 px-2 text-right">Actions</th>
+                    <th className="py-2 px-2">{t("jobDashboard.trialId")}</th>
+                    <th className="py-2 px-2">{t("jobDashboard.hyperparameters")}</th>
+                    <th className="py-2 px-2">{t("jobDashboard.epochs")}</th>
+                    <th className="py-2 px-2">{t("jobDashboard.score")}</th>
+                    <th className="py-2 px-2">{t("jobDashboard.status")}</th>
+                    <th className="py-2 px-2">{t("jobDashboard.date")}</th>
+                    <th className="py-2 px-2 text-right">{t("jobDashboard.actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {historyRows.length === 0 && (
                     <tr>
                       <td className="py-3 px-2 text-white/50" colSpan={6}>
-                        기록이 없습니다.
+                        {t("jobDashboard.noHistory")}
                       </td>
                     </tr>
                   )}
@@ -1853,7 +2176,7 @@ export default function JobDashboardModal({
                                 : "text-amber-200"
                           }`}
                         >
-                          {row.status || "Done"}
+                          {formatStatusLabel(row.status)}
                         </span>
                       </td>
                       <td className="py-2 px-2 text-white/60 whitespace-nowrap">
@@ -1862,16 +2185,16 @@ export default function JobDashboardModal({
                   <td className="py-2 px-2">
                     <div className="flex justify-end gap-2">
                       <button
-                        className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/80 hover:border-white/30 hover:bg-white/10 transition"
+                        className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-[rgb(var(--theme-btn-text))] hover:border-white/30 hover:bg-white/10 transition"
                         onClick={() => handleShowDetailRecord(row.dbId)}
                       >
-                        Detail
+                        {t("jobDashboard.detail")}
                       </button>
                       <button
-                        className="rounded-full border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-100 hover:bg-rose-500/20 transition"
+                        className="rounded-full border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-500/20 transition"
                         onClick={() => handleDeleteExperiment(row.id, row.dbId)}
                       >
-                        Delete
+                        {t("train.delete")}
                       </button>
                     </div>
                   </td>
@@ -1900,10 +2223,10 @@ export default function JobDashboardModal({
               }`}
             >
               <div>
-                <div className="text-base font-semibold text-white/90">Deploy Model</div>
-                <div className="text-xs text-white/70">Convert to ONNX/TensorRT for Edge Devices</div>
+                <div className="text-base font-semibold text-[rgb(var(--theme-btn-text))]">{t("jobDashboard.deployModel")}</div>
+                <div className="text-xs text-[rgb(var(--theme-btn-text))/0.7]">{t("jobDashboard.deployDesc")}</div>
               </div>
-              <span className="ml-auto text-white/70">›</span>
+              <span className="ml-auto text-[rgb(var(--theme-btn-text))/0.7]">›</span>
             </button>
             <button
               type="button"
@@ -1913,15 +2236,15 @@ export default function JobDashboardModal({
               disabled={!canUseDeployActions || deploying || !jobId}
               className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-left shadow-sm transition ${
                 canUseDeployActions
-                  ? "border-violet-400/40 bg-[#140b24]/80 hover:border-violet-300/60 hover:bg-[#140b24]"
+                  ? "border-violet-400/40 bg-[rgb(var(--theme-panel-soft)/0.8)] hover:border-violet-300/60 hover:bg-[rgb(var(--theme-panel-soft))]"
                   : "border-white/10 bg-white/5 opacity-60 cursor-not-allowed"
               }`}
             >
               <div>
-                <div className="text-base font-semibold text-white/90">Explain Results (XAI)</div>
-                <div className="text-xs text-white/70">Visualize Grad-CAM Heatmap</div>
+                <div className="text-base font-semibold text-[rgb(var(--theme-btn-text))]">{t("jobDashboard.xai")}</div>
+                <div className="text-xs text-[rgb(var(--theme-btn-text))/0.7]">{t("jobDashboard.xaiDesc")}</div>
               </div>
-              <span className="ml-auto text-white/70">›</span>
+              <span className="ml-auto text-[rgb(var(--theme-btn-text))/0.7]">›</span>
             </button>
           </div>
           <div className="flex justify-end">
@@ -1931,44 +2254,54 @@ export default function JobDashboardModal({
               disabled={deleteLoading || !jobId}
               className="h-11 rounded-xl border border-rose-400/70 bg-[#2d1223] px-5 text-sm font-semibold text-rose-50 transition hover:border-rose-300 hover:bg-[#35162b] disabled:opacity-50"
             >
-              {deleteLoading ? "Deleting..." : "Delete Training"}
+              {deleteLoading ? t("common.loading") : t("jobDashboard.deleteTraining")}
             </button>
           </div>
         </div>
 
         {deployModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
-            <div className="w-[420px] rounded-2xl border border-white/12 bg-[#0b1024] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.75)]">
-              <div className="text-sm font-semibold text-sky-200 mb-3">Model Deployment</div>
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgb(var(--theme-overlay)/0.7)]"
+            onClick={() => {
+              setDeployModalOpen(false);
+              setDeployStatus("idle");
+              setDeployMessage(null);
+            }}
+          >
+            <div
+              className="w-[420px] rounded-2xl border border-white/12 bg-[rgb(var(--theme-panel))] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.75)]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="text-sm font-semibold text-sky-200 mb-3">{t("jobDashboard.deployTitle")}</div>
               <div className="flex flex-col items-center text-center gap-4">
-                <div className="text-base font-semibold text-white/90 leading-relaxed">
-                  Export PyTorch (.pt) to ONNX/TensorRT<br />Optimize for Edge Devices
+                <div className="text-base font-semibold text-white/90 leading-relaxed whitespace-pre-line">
+                  {t("jobDashboard.deploySubtitle")}
                 </div>
                 {deployStatus === "error" && (
                   <div className="w-full rounded-lg border border-rose-400/50 bg-rose-900/30 px-3 py-2 text-sm text-rose-100">
-                    {deployMessage || "배포 요청 중 오류가 발생했습니다."}
+                    {deployMessage || t("jobDashboard.deployError")}
                   </div>
                 )}
                 {deployStatus === "success" && (
                   <div className="w-full rounded-lg border border-emerald-400/50 bg-emerald-900/30 px-3 py-2 text-sm text-emerald-100">
-                    {deployMessage || "배포 변환이 시작되었습니다."}
+                    {deployMessage || t("jobDashboard.deploySuccess")}
                   </div>
                 )}
                 {deployStatus === "idle" && (
                   <div className="text-xs text-white/60">
-                    완료된 모델만 변환할 수 있습니다.
+                    {t("jobDashboard.deployIdle")}
                   </div>
                 )}
 
                 <div className="w-full rounded-xl border border-white/10 bg-white/5 p-3 text-left">
-                  <div className="text-xs font-semibold text-white/70 mb-2">Save options</div>
+                  <div className="text-xs font-semibold text-white/70 mb-2">{t("jobDashboard.saveOptions")}</div>
                   <div className="grid grid-cols-1 gap-2">
                     <label className="text-[11px] text-white/60">
-                      Target
+                      {t("jobDashboard.target")}
                       <select
                         value={deployTarget}
                         onChange={(e) => setDeployTarget(e.target.value as any)}
-                        className="mt-1 w-full rounded-lg border border-white/10 bg-[#0b1024] px-3 py-2 text-sm text-white/90"
+                        className="mt-1 w-full rounded-lg border border-white/10 bg-[rgb(var(--theme-panel))] px-3 py-2 text-sm text-white/90"
                       >
                         <option value="onnx">ONNX (.onnx)</option>
                         <option value="tensorrt">TensorRT (.engine)</option>
@@ -1976,15 +2309,16 @@ export default function JobDashboardModal({
                     </label>
 
                     <label className="text-[11px] text-white/60">
-                      File name (without extension)
+                      {t("jobDashboard.fileName")}
                       <input
                         value={deployOutputName}
                         onChange={(e) => setDeployOutputName(e.target.value)}
                         placeholder={jobId || "job_id"}
-                        className="mt-1 w-full rounded-lg border border-white/10 bg-[#0b1024] px-3 py-2 text-sm text-white/90"
+                        className="mt-1 w-full rounded-lg border border-white/10 bg-[rgb(var(--theme-panel))] px-3 py-2 text-sm text-white/90"
                       />
                       <div className="mt-1 text-[11px] text-white/45">
-                        Saved under: <span className="text-white/60">back_end/saved_models/deploy</span>
+                        {t("jobDashboard.savedUnder")}:{" "}
+                        <span className="text-white/60">back_end/saved_models/deploy</span>
                       </div>
                     </label>
                   </div>
@@ -1995,17 +2329,17 @@ export default function JobDashboardModal({
                     type="button"
                     onClick={handleDeploy}
                     disabled={deploying || !jobId}
-                    className="flex-1 rounded-lg bg-sky-600 px-4 py-3 text-sm font-semibold text-white shadow-md transition hover:bg-sky-500 disabled:opacity-60"
+                    className="flex-1 rounded-lg bg-sky-600 px-4 py-3 text-sm font-semibold text-[rgb(var(--theme-btn-text))] shadow-md transition hover:bg-sky-500 disabled:opacity-60"
                   >
-                    {deploying ? "Creating..." : "Create"}
+                    {deploying ? t("jobDashboard.deployCreating") : t("jobDashboard.deployCreate")}
                   </button>
                   <button
                     type="button"
                     onClick={handleOpenConvertedFolder}
                     disabled={!jobId}
-                    className="rounded-lg border border-white/10 px-4 py-3 text-sm font-semibold text-white/80 hover:bg-white/5 transition disabled:opacity-60"
+                    className="rounded-lg border border-white/10 px-4 py-3 text-sm font-semibold text-[rgb(var(--theme-btn-text))] hover:bg-white/5 transition disabled:opacity-60"
                   >
-                    Open
+                    {t("common.open")}
                   </button>
                   <button
                     type="button"
@@ -2014,9 +2348,9 @@ export default function JobDashboardModal({
                       setDeployStatus("idle");
                       setDeployMessage(null);
                     }}
-                    className="rounded-lg border border-white/10 px-4 py-3 text-sm font-semibold text-white/80 hover:bg-white/5 transition"
+                    className="rounded-lg border border-white/10 px-4 py-3 text-sm font-semibold text-[rgb(var(--theme-btn-text))] hover:bg-white/5 transition"
                   >
-                    Close
+                    {t("common.close")}
                   </button>
                 </div>
               </div>
@@ -2025,31 +2359,37 @@ export default function JobDashboardModal({
         )}
 
         {xaiModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
-            <div className="w-[920px] max-w-[96vw] rounded-2xl border border-white/12 bg-[#140b24] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.75)]">
-              <div className="text-sm font-semibold text-violet-200 mb-3">Explain Results (XAI)</div>
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgb(var(--theme-overlay)/0.7)]"
+            onClick={() => setXaiModalOpen(false)}
+          >
+            <div
+              className="w-[920px] max-w-[96vw] rounded-2xl border border-white/12 bg-[rgb(var(--theme-panel-soft))] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.75)]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="text-sm font-semibold text-violet-200 mb-3">{t("jobDashboard.xaiTitle")}</div>
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
                 <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs font-semibold text-white/70 mb-2">Source</div>
+                  <div className="text-xs font-semibold text-white/70 mb-2">{t("jobDashboard.source")}</div>
                   <select
                     value={xaiSourceKey}
                     onChange={(e) => setXaiSourceKey(e.target.value as any)}
-                    className="w-full rounded-lg border border-white/10 bg-[#0b1024] px-3 py-2 text-sm text-white/90"
+                    className="w-full rounded-lg border border-white/10 bg-[rgb(var(--theme-panel))] px-3 py-2 text-sm text-white/90"
                   >
                     {(xaiSources.length ? xaiSources : [
-                      { key: "training_results", label: "Training Results", available: true },
-                      { key: "dataset_train", label: "Dataset (train)", available: true },
-                      { key: "dataset_val", label: "Dataset (val)", available: true },
+                      { key: "training_results", label: t("jobDashboard.xaiSourceTraining"), available: true },
+                      { key: "dataset_train", label: t("jobDashboard.xaiSourceDatasetTrain"), available: true },
+                      { key: "dataset_val", label: t("jobDashboard.xaiSourceDatasetVal"), available: true },
                     ]).map((s) => (
                       <option key={s.key} value={s.key} disabled={!s.available}>
-                        {s.label}{!s.available ? " (unavailable)" : ""}
+                        {s.label}{!s.available ? ` ${t("jobDashboard.unavailableSuffix")}` : ""}
                       </option>
                     ))}
                   </select>
 
                   <div className="mt-4 flex items-center justify-between">
-                    <div className="text-xs font-semibold text-white/70">Select image</div>
-                    <div className="text-xs text-white/50">{xaiImages.length} items</div>
+                    <div className="text-xs font-semibold text-white/70">{t("jobDashboard.selectImage")}</div>
+                    <div className="text-xs text-white/50">{t("jobDashboard.items", { count: xaiImages.length })}</div>
                   </div>
 
                   {xaiError && (
@@ -2060,7 +2400,7 @@ export default function JobDashboardModal({
 
                   <div className="mt-3 max-h-[420px] overflow-y-auto rounded-lg border border-white/10 p-2">
                     {xaiLoading && !xaiImages.length ? (
-                      <div className="text-sm text-white/60 px-2 py-3">Loading 5</div>
+                      <div className="text-sm text-white/60 px-2 py-3">{t("jobDashboard.loading")}</div>
                     ) : xaiImages.length ? (
                       <div className="grid grid-cols-3 gap-2">
                         {xaiImages.map((img) => {
@@ -2081,7 +2421,7 @@ export default function JobDashboardModal({
                               title={img.label}
                             >
                               <img
-                                src={`${API_BASE}${toNodeFileUrl(img.url)}`}
+                                src={`${API_BASE}${withAuthToken(toNodeFileUrl(img.url))}`}
                                 alt={img.label}
                                 className="h-20 w-full object-cover opacity-90 group-hover:opacity-100"
                                 loading="lazy"
@@ -2091,25 +2431,25 @@ export default function JobDashboardModal({
                         })}
                       </div>
                     ) : (
-                      <div className="text-sm text-white/60 px-2 py-3">No images found.</div>
+                      <div className="text-sm text-white/60 px-2 py-3">{t("jobDashboard.noImages")}</div>
                     )}
                   </div>
                 </div>
 
                 <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <div className="text-xs font-semibold text-white/70">Result</div>
+                    <div className="text-xs font-semibold text-white/70">{t("jobDashboard.result")}</div>
                   </div>
 
                   {!xaiSelected && (
-                    <div className="rounded-lg border border-white/10 bg-[#0b1024]/40 px-4 py-4 text-sm text-white/70">
+                    <div className="rounded-lg border border-white/10 bg-[rgb(var(--theme-panel)/0.4)] px-4 py-4 text-sm text-white/70">
                       Pick an image from the left to generate a heatmap view.
                     </div>
                   )}
 
                   {xaiSelected && !xaiPanels && (
-                    <div className="rounded-lg border border-white/10 bg-[#0b1024]/40 px-4 py-4 text-sm text-white/70">
-                      {xaiLoading ? "Generating 5" : "No result yet."}
+                    <div className="rounded-lg border border-white/10 bg-[rgb(var(--theme-panel)/0.4)] px-4 py-4 text-sm text-white/70">
+                      {xaiLoading ? t("jobDashboard.generating") : t("jobDashboard.noResultYet")}
                     </div>
                   )}
 
@@ -2121,12 +2461,12 @@ export default function JobDashboardModal({
                         ["boxes", xaiPanels.boxes],
                         ["overlay", xaiPanels.overlay],
                       ] as const).map(([key, panel]) => (
-                        <div key={key} className="rounded-xl border border-white/10 bg-[#0b1024]/40 p-3">
+                        <div key={key} className="rounded-xl border border-white/10 bg-[rgb(var(--theme-panel)/0.4)] p-3">
                           <div className="text-xs font-semibold text-white/70 mb-2">{panel?.label || key}</div>
                           <div className="aspect-[4/3] overflow-hidden rounded-lg border border-white/10 bg-black/30">
                             {panel?.url ? (
                               <img
-                                src={`${API_BASE}${withCacheBust(toNodeFileUrl(panel.url), xaiCacheBust)}`}
+                                src={`${API_BASE}${withAuthToken(withCacheBust(toNodeFileUrl(panel.url), xaiCacheBust))}`}
                                 alt={panel?.label || key}
                                 className="h-full w-full object-contain"
                               />
@@ -2148,9 +2488,9 @@ export default function JobDashboardModal({
                 <button
                   type="button"
                   onClick={() => setXaiModalOpen(false)}
-                  className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/80 hover:bg-white/10 transition"
+                  className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-[rgb(var(--theme-btn-text))] hover:bg-white/10 transition"
                 >
-                  Close
+                  {t("common.close")}
                 </button>
               </div>
             </div>
@@ -2159,7 +2499,7 @@ export default function JobDashboardModal({
 
         {expandedChart && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(var(--theme-overlay)/0.7)]"
             onClick={() => setExpandedChart(null)}
           >
             <div className="max-w-[96vw]" onClick={(e) => e.stopPropagation()}>
@@ -2170,15 +2510,17 @@ export default function JobDashboardModal({
 
         {detailModal.open && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(var(--theme-overlay)/0.7)] px-4"
             onClick={() => setDetailModal({ open: false, loading: false })}
           >
             <div
-              className="max-w-[720px] w-full rounded-2xl border border-white/10 bg-[#0c1020] shadow-2xl p-5 text-white"
+              className="max-w-[720px] w-full rounded-2xl border border-white/10 bg-[rgb(var(--theme-panel-strong))] shadow-2xl p-5 text-white"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-3">
-                <div className="text-sm font-semibold tracking-[0.12em] text-white/70">EXPERIMENT DETAIL</div>
+                <div className="text-sm font-semibold tracking-[0.12em] text-white/70">
+                  {t("jobDashboard.detailTitle")}
+                </div>
                 <button
                   type="button"
                   onClick={() => setDetailModal({ open: false, loading: false })}
@@ -2187,38 +2529,73 @@ export default function JobDashboardModal({
                   ×
                 </button>
               </div>
-              {detailModal.loading && <div className="text-white/60 text-sm">Loading...</div>}
+              {detailModal.loading && <div className="text-white/60 text-sm">{t("jobDashboard.detailLoading")}</div>}
               {!detailModal.loading && detailModal.error && (
-                <div className="text-rose-300 text-sm">불러오기 실패: {detailModal.error}</div>
+                <div className="text-rose-300 text-sm">
+                  {t("jobDashboard.detailLoadFailed", { reason: detailModal.error })}
+                </div>
               )}
               {!detailModal.loading && detailModal.record && (
                 <div className="space-y-2 text-sm text-white/80">
                   <div>
-                    <span className="text-white/50 mr-2">Model:</span>
+                    <span className="text-white/50 mr-2">{t("jobDashboard.detailModel")}:</span>
                     <span>{String(detailModal.record.model ?? model ?? "—")}</span>
                   </div>
                   <div>
-                    <span className="text-white/50 mr-2">Status:</span>
+                    <span className="text-white/50 mr-2">{t("jobDashboard.detailTask")}:</span>
+                    <span>{String((detailModal.record as any)?.task ?? taskType ?? "—")}</span>
+                  </div>
+                  <div>
+                    <span className="text-white/50 mr-2">{t("jobDashboard.detailStatus")}:</span>
                     <span>{String(detailModal.record.status ?? jobStatus ?? "—")}</span>
                   </div>
+                  {(() => {
+                    const taskValue = String((detailModal.record as any)?.task ?? taskType ?? "detect").toLowerCase();
+                    if (taskValue === "classify") {
+                      return (
+                        <>
+                          <div>
+                            <span className="text-white/50 mr-2">{t("jobDashboard.metrics.acc")}:</span>
+                            <span>{String((detailModal.record?.metrics as any)?.acc ?? "—")}</span>
+                          </div>
+                          <div>
+                            <span className="text-white/50 mr-2">{t("jobDashboard.metrics.precision")}:</span>
+                            <span>{String((detailModal.record?.metrics as any)?.precision ?? "—")}</span>
+                          </div>
+                          <div>
+                            <span className="text-white/50 mr-2">{t("jobDashboard.metrics.recall")}:</span>
+                            <span>{String((detailModal.record?.metrics as any)?.recall ?? "—")}</span>
+                          </div>
+                          <div>
+                            <span className="text-white/50 mr-2">{t("jobDashboard.metrics.f1")}:</span>
+                            <span>{String((detailModal.record?.metrics as any)?.f1 ?? "—")}</span>
+                          </div>
+                        </>
+                      );
+                    }
+                    return (
+                      <>
+                        <div>
+                          <span className="text-white/50 mr-2">{t("jobDashboard.metrics.map50")}:</span>
+                          <span>{String((detailModal.record?.metrics as any)?.map50 ?? "—")}</span>
+                        </div>
+                        <div>
+                          <span className="text-white/50 mr-2">{t("jobDashboard.metrics.map95")}:</span>
+                          <span>{String((detailModal.record?.metrics as any)?.map50_95 ?? "—")}</span>
+                        </div>
+                        <div>
+                          <span className="text-white/50 mr-2">{t("jobDashboard.metrics.precision")}:</span>
+                          <span>{String((detailModal.record?.metrics as any)?.precision ?? "—")}</span>
+                        </div>
+                        <div>
+                          <span className="text-white/50 mr-2">{t("jobDashboard.metrics.recall")}:</span>
+                          <span>{String((detailModal.record?.metrics as any)?.recall ?? "—")}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
                   <div>
-                    <span className="text-white/50 mr-2">MAP50:</span>
-                    <span>{String((detailModal.record.metrics as any)?.map50 ?? "—")}</span>
-                  </div>
-                  <div>
-                    <span className="text-white/50 mr-2">MAP50-95:</span>
-                    <span>{String((detailModal.record.metrics as any)?.map50_95 ?? "—")}</span>
-                  </div>
-                  <div>
-                    <span className="text-white/50 mr-2">Precision:</span>
-                    <span>{String((detailModal.record.metrics as any)?.precision ?? "—")}</span>
-                  </div>
-                  <div>
-                    <span className="text-white/50 mr-2">Recall:</span>
-                    <span>{String((detailModal.record.metrics as any)?.recall ?? "—")}</span>
-                  </div>
-                  <div>
-                    <span className="text-white/50 mr-2">Hyperparams:</span>
+                    <span className="text-white/50 mr-2">{t("jobDashboard.detailHyperparams")}:</span>
                     <pre className="mt-1 rounded-lg bg-white/5 p-2 text-xs text-white/80 whitespace-pre-wrap">
                       {JSON.stringify(
                         (() => {
@@ -2233,17 +2610,19 @@ export default function JobDashboardModal({
                     </pre>
                   </div>
                   <div>
-                    <span className="text-white/50 mr-2">Optuna Search Space:</span>
+                    <span className="text-white/50 mr-2">{t("jobDashboard.detailSearchSpace")}:</span>
                     <pre className="mt-1 rounded-lg bg-white/5 p-2 text-xs text-white/80 whitespace-pre-wrap">
                       {JSON.stringify((detailModal.record as any)?.searchSpace ?? {}, null, 2)}
                     </pre>
                   </div>
                   <div>
-                    <span className="text-white/50 mr-2">Hyperband Logs:</span>
+                    <span className="text-white/50 mr-2">{t("jobDashboard.detailHyperbandLogs")}:</span>
                     <pre className="mt-1 rounded-lg bg-white/5 p-2 text-xs text-white/80 whitespace-pre-wrap max-h-48 overflow-y-auto">
-                      {Array.isArray(detailModal.record.logs)
-                        ? detailModal.record.logs.join("\n")
-                        : String(detailModal.record.logs ?? "—")}
+                      {Array.isArray((detailModal.record as any).hyperband_logs)
+                        ? ((detailModal.record as any).hyperband_logs as string[]).join("\n")
+                        : Array.isArray(detailModal.record.logs)
+                          ? serializeLogs(detailModal.record.logs as unknown[]).join("\n")
+                          : String(detailModal.record.logs ?? "—")}
                     </pre>
                   </div>
                 </div>

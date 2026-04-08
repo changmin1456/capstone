@@ -8,6 +8,9 @@ export default function Modal({
   centered = false,
   size = "lg",
   footer,
+  panelClassName,
+  bodyClassName,
+  bodyScroll = true,
   children,
 }: {
   open: boolean;
@@ -17,6 +20,9 @@ export default function Modal({
   centered?: boolean;
   size?: "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl";
   footer?: React.ReactNode;
+  panelClassName?: string;
+  bodyClassName?: string;
+  bodyScroll?: boolean;
   children: React.ReactNode;
 }) {
   useEffect(() => {
@@ -53,7 +59,7 @@ export default function Modal({
   <div className="fixed inset-0 z-50">
       {/* backdrop */}
       <div
-    className="absolute inset-0 bg-black/55"
+        className="absolute inset-0 bg-[rgb(var(--theme-overlay)/0.55)]"
         onClick={onClose}
       />
 
@@ -65,7 +71,7 @@ export default function Modal({
   : `absolute left-1/2 top-4 w-full ${maxW} -translate-x-1/2 p-4`
         }
       >
-    <div className="relative w-full overflow-hidden rounded-2xl border border-white/10 bg-[#0b1020] shadow-[0_30px_120px_rgba(0,0,0,0.65)]">
+    <div className={`relative w-full overflow-hidden rounded-2xl border border-white/10 bg-[rgb(var(--theme-panel-strong))] shadow-[0_30px_120px_rgba(0,0,0,0.65)] ${panelClassName || ""}`}>
       <div className="relative flex max-h-[calc(100vh-2rem)] flex-col">
             {(title || !hideCloseButton) && (
               <div className="flex items-start justify-between gap-3 border-b border-white/10 bg-white/[0.03] px-6 py-4">
@@ -92,7 +98,9 @@ export default function Modal({
               </div>
             )}
 
-            <div className="px-6 py-5 overflow-y-auto">{children}</div>
+            <div className={`px-6 py-5 ${bodyScroll ? "overflow-y-auto" : "overflow-visible"} ${bodyClassName || ""}`}>
+              {children}
+            </div>
 
             {footer && (
               <div className="flex items-center justify-end gap-2 border-t border-white/10 bg-white/[0.02] px-6 py-4">

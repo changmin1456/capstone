@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pymongo
+python-multipart
+pyjwt
+passlib[bcrypt]
+
+email-validator

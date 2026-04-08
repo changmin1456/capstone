@@ -6,6 +6,7 @@ const path = require("path");
 const fs = require("fs").promises;
 const { requireAuth } = require("../middleware/auth");
 const { isAdmin, requireProjectAccess } = require("../middleware/authz");
+const { authHeaders } = require("../utils/forwardAuth");
 
 const router = express.Router();
 
@@ -195,6 +196,7 @@ router.post("/datasets/upload", requireAuth, async (req, res) => {
       const upstream = await axios.post(`${FAST_API_BASE}/datasets/upload`, form, {
         headers: {
           ...form.getHeaders(),
+          ...authHeaders(req),
         },
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
@@ -276,6 +278,7 @@ router.post("/datasets/analyze", requireAuth, async (req, res) => {
       const upstream = await axios.post(`${FAST_API_BASE}/datasets/analyze`, form, {
         headers: {
           ...form.getHeaders(),
+          ...authHeaders(req),
         },
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
@@ -325,6 +328,7 @@ router.get("/datasets/report", requireAuth, async (req, res) => {
     const upstream = await axios.get(`${FAST_API_BASE}/datasets/report`, {
       params: req.query,
       validateStatus: () => true,
+      headers: authHeaders(req),
     });
     res.status(upstream.status).send(upstream.data);
   } catch (err) {
@@ -344,7 +348,7 @@ router.post("/datasets/delete-path", requireAuth, async (req, res) => {
   const ok = await ensureDatasetPathOwner(req, res, req.body?.target || req.body?.path);
   if (ok !== true) return;
     const upstream = await axios.post(`${FAST_API_BASE}/datasets/delete-path`, req.body, {
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...authHeaders(req) },
       validateStatus: () => true,
     });
     res.status(upstream.status).send(upstream.data);
@@ -381,7 +385,7 @@ router.post("/datasets/cancel", requireAuth, async (req, res) => {
       `${FAST_API_BASE}/datasets/delete-path`,
       { target },
       {
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders(req) },
         validateStatus: () => true,
       }
     );
@@ -437,7 +441,7 @@ router.post("/datasets/sweep-temp", requireAuth, async (req, res) => {
         `${FAST_API_BASE}/datasets/delete-path`,
         { target: dirPath },
         {
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...authHeaders(req) },
           validateStatus: () => true,
         }
       );

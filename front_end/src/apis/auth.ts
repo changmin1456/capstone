@@ -40,3 +40,16 @@ export async function apiLogout(): Promise<void> {
   // server-side logout not required for JWT by default
   clearAuthToken();
 }
+
+export async function apiDeleteAccount(): Promise<void> {
+  await apiFetch<void>("/api/auth/me", { method: "DELETE" });
+  clearAuthToken();
+}
+
+export async function apiChangePassword(payload: { currentPassword: string; newPassword: string }): Promise<void> {
+  await apiFetch<void>("/api/auth/password", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}

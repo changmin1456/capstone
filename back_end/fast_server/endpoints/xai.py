@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Literal
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from db import jobs_col
+from endpoints.auth import get_current_user, is_admin
 
 router = APIRouter(tags=["xai"])
 
@@ -20,7 +22,7 @@ class _FileItem:
     url: str
 
 
-def _get_job_or_404(job_id: str) -> dict:
+def _get_job_or_404(job_id: str, user=None) -> dict:
     try:
         oid = ObjectId(job_id)
     except Exception:
@@ -29,6 +31,10 @@ def _get_job_or_404(job_id: str) -> dict:
     doc = jobs_col.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Job not found")
+    if user and not is_admin(user):
+        owner = doc.get("ownerUserId") or doc.get("owner_id") or doc.get("ownerId")
+        if not owner or str(owner) != str(user.get("id")):
+            raise HTTPException(status_code=403, detail="Forbidden")
     return doc
 
 
@@ -38,6 +44,11 @@ def _fast_server_dir() -> Path:
 
 def _project_root() -> Path:
     return _fast_server_dir().parent
+
+
+def _runs_root() -> Path:
+    root = os.getenv("RUNS_DIR") or (_fast_server_dir() / "runs")
+    return Path(root)
 
 
 def _list_images(dir_path: Path, *, kind: str, rel_prefix: str, limit: int = 200) -> list[_FileItem]:
@@ -74,7 +85,7 @@ def _list_images(dir_path: Path, *, kind: str, rel_prefix: str, limit: int = 200
 
 
 @router.get("/jobs/{job_id}/xai/sources")
-def list_xai_sources(job_id: str):
+def list_xai_sources(job_id: str, user=Depends(get_current_user)):
     """Return available image sources for a job.
 
     Contract:
@@ -86,7 +97,7 @@ def list_xai_sources(job_id: str):
       - dataset_train: dataset images/train
       - dataset_val: dataset images/val
     """
-    job = _get_job_or_404(job_id)
+    job = _get_job_or_404(job_id, user)
 
     dataset_path = (job.get("dataset_path") or "").strip()
     has_dataset = bool(dataset_path)
@@ -122,19 +133,14 @@ class XaiGenerateRequest(BaseModel):
 
 
 @router.get("/jobs/{job_id}/xai/images")
-def list_xai_images(job_id: str, source: SourceKey, limit: int = 60):
-    job = _get_job_or_404(job_id)
+def list_xai_images(job_id: str, source: SourceKey, limit: int = 60, user=Depends(get_current_user)):
+    job = _get_job_or_404(job_id, user)
 
     limit_norm = max(1, min(300, int(limit)))
 
     if source == "training_results":
-        # run_training creates workdir + runs/job_{id}
-        run_dir = _fast_server_dir() / "datasets"  # fallback
-
-        dataset_path = (job.get("dataset_path") or "").strip()
-        if dataset_path:
-            workdir = (_fast_server_dir() / "datasets" / dataset_path).resolve()
-            run_dir = workdir / "runs" / f"job_{job_id}"
+        # run_training creates runs/<job_id>
+        run_dir = _runs_root() / job_id
 
         # Serve under kind=runs; make it relative to fast_server root
         return {
@@ -164,7 +170,7 @@ def list_xai_images(job_id: str, source: SourceKey, limit: int = 60):
 
 
 @router.post("/jobs/{job_id}/xai/generate")
-def generate_xai(job_id: str, req: XaiGenerateRequest):
+def generate_xai(job_id: str, req: XaiGenerateRequest, user=Depends(get_current_user)):
     """Generate a simple 4-panel output for the selected image.
 
     v1 implementation goal:
@@ -175,7 +181,7 @@ def generate_xai(job_id: str, req: XaiGenerateRequest):
       - This is intentionally a lightweight placeholder so UI can be wired end-to-end.
       - Can be upgraded later to real Grad-CAM.
     """
-    _ = _get_job_or_404(job_id)
+    _ = _get_job_or_404(job_id, user)
 
     # Resolve selected source image into a `/files/...` URL and a filesystem path we can copy.
     # We don't return any local/absolute paths.

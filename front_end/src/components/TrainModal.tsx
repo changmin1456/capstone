@@ -10,6 +10,9 @@ import {
 import Modal from "./Modal";
 import { API_BASE } from "../apis/api";
 import { readHttpErrorMessage } from "../utils/httpError";
+import { getAuthToken } from "../utils/auth";
+import { tEn, useI18n } from "../i18n";
+import { getDefaultEpochs, getDefaultModel } from "../utils/trainingDefaults";
 
 type ModelItem = {
   id: string;
@@ -68,7 +71,7 @@ export default function TrainModal({
   onCreated,
   requireProjectId = false,
   existingTitles = [],
-  titleText = "Create New Training",
+  titleText,
   initialTitle,
   initialDescription,
   initialModel,
@@ -78,9 +81,12 @@ export default function TrainModal({
   saveLabel,
   readOnly = false,
 }: TrainModalProps) {
+  const { t } = useI18n();
   const [trainName, setTrainName] = useState("");
   const [desc, setDesc] = useState("");
   const isDetailMode = Boolean(jobId);
+  const resolvedTitle = titleText ?? t("trainModal.titleCreate");
+  const actionLabel = saveLabel ?? t("common.create");
 
   const [epochs, setEpochs] = useState(initialEpochs ?? 50);
   const [optimizer, setOptimizer] = useState("AdamW");
@@ -115,6 +121,7 @@ export default function TrainModal({
   const [modelQuery, setModelQuery] = useState("");
   const [modelSearch, setModelSearch] = useState("");
   const [selectedModelId, setSelectedModelId] = useState("");
+  const [taskType, setTaskType] = useState<"detect" | "classify">("detect");
   const [showModelList, setShowModelList] = useState(false);
   const [isDraggingModels, setIsDraggingModels] = useState(false);
   const [models, setModels] = useState<ModelItem[]>([]);
@@ -125,6 +132,11 @@ export default function TrainModal({
   const [baseSlug, setBaseSlug] = useState<string>("");
   const [detailLoaded, setDetailLoaded] = useState(false);
   const [datasetLocked, setDatasetLocked] = useState(false);
+
+  const authHeaders = (): Record<string, string> => {
+    const token = getAuthToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
 
   const modelOptions = useMemo(() => {
     const map = new Map<string, ModelItem>();
@@ -164,7 +176,7 @@ export default function TrainModal({
     try {
       await fetch(`${API_BASE}/api/datasets/cancel`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({ dataset_path: p }),
       });
     } catch (err) {
@@ -185,13 +197,15 @@ export default function TrainModal({
 
   useEffect(() => {
     if (!open) return;
+    const defaultModel = getDefaultModel();
+    const defaultEpochs = Number(getDefaultEpochs());
     setTrainName(initialTitle || "");
     setDesc(initialDescription || "");
-    setModelQuery(initialModel || "");
-  setModelSearch("");
+    setModelQuery(initialModel || (!isDetailMode ? defaultModel : ""));
+    setModelSearch("");
     setSelectedModelId("");
     setDatasetName(initialDatasetName || "");
-    setEpochs(initialEpochs ?? 50);
+    setEpochs(initialEpochs ?? (Number.isFinite(defaultEpochs) ? defaultEpochs : 50));
     setInitialDatasetInfo({ path: initialDatasetPath, name: initialDatasetName });
     setBaseSlug((initialTitle || "").toLowerCase().trim());
     if (initialDatasetPath && initialDatasetName) {
@@ -223,7 +237,9 @@ export default function TrainModal({
     const loadModels = async () => {
       setLoadingModels(true);
       try {
-        const res = await fetch(`${API_BASE}/api/models`);
+        const res = await fetch(`${API_BASE}/api/models`, {
+          headers: authHeaders(),
+        });
   if (!res.ok) throw new Error(await readHttpErrorMessage(res));
         const data = (await res.json()) as ModelItem[];
         if (Array.isArray(data)) setModels(data);
@@ -259,7 +275,7 @@ export default function TrainModal({
     if (!file) return;
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
     if (ext !== "py") {
-      alert("모델 업로드는 .py 파일만 지원합니다. (weights는 추후 추가)");
+      alert(t("trainModal.modelUploadOnlyPy"));
       return;
     }
 
@@ -273,6 +289,9 @@ export default function TrainModal({
     try {
       const res = await fetch(`${API_BASE}/api/models`, {
         method: "POST",
+        headers: {
+          ...authHeaders(),
+        },
         body: form,
       });
       if (!res.ok) {
@@ -297,10 +316,10 @@ export default function TrainModal({
 
     if (!fileToUse) {
       if (!isDetailMode && !datasetUploadInfo) {
-        alert("Dataset(.zip)을 업로드해 주세요.");
+        alert(t("trainModal.datasetUploadPrompt"));
         return;
       }
-      alert("분석할 Dataset(.zip)을 업로드해 주세요.");
+      alert(t("trainModal.datasetAnalyzePrompt"));
       return;
     }
 
@@ -313,6 +332,9 @@ export default function TrainModal({
 
       const res = await fetch(`${API_BASE}/api/datasets/analyze`, {
         method: "POST",
+        headers: {
+          ...authHeaders(),
+        },
         body: form,
       });
 
@@ -354,7 +376,7 @@ export default function TrainModal({
       setSubmitError(null);
     } catch (err) {
       console.error("analyze failed", err);
-      const msg = err instanceof Error ? err.message : "분석에 실패했습니다.";
+      const msg = err instanceof Error ? err.message : t("trainModal.analyzeFailed");
       setSubmitError(msg);
       alert(msg);
     } finally {
@@ -365,7 +387,7 @@ export default function TrainModal({
   const handleSubmit = async () => {
     if (submitting || uploadingDataset) return;
     if (requireProjectId && !projectId) {
-      setSubmitError("projectId가 없습니다. 프로젝트 상세에서 실행해주세요.");
+      setSubmitError(t("trainModal.missingProjectId"));
       return;
     }
 
@@ -389,13 +411,13 @@ export default function TrainModal({
     const resolvedProjectId = await resolveProjectId(projectId);
     if (requireProjectId && (!resolvedProjectId || !/^[a-fA-F0-9]{24}$/.test(resolvedProjectId))) {
       setSubmitError(
-        `Invalid project_id: '${projectId}'. 프로젝트 상세의 실제 프로젝트 id(24자리 ObjectId)를 사용해야 합니다.`,
+        t("trainModal.invalidProjectId", { projectId: String(projectId ?? "") }),
       );
       return;
     }
 
     if (!datasetFile && !datasetUploadInfo && !initialDatasetName) {
-      setSubmitError("Dataset(.zip)을 선택해주세요.");
+      setSubmitError(t("trainModal.datasetSelectPrompt"));
       return;
     }
 
@@ -404,7 +426,7 @@ export default function TrainModal({
     if (!isDetailMode) {
       const duplicateTitle = existingTitles.some((t: string) => (t || "").trim().toLowerCase() === normalized);
       if (normalized && duplicateTitle) {
-        setSubmitError("이미 동일한 이름의 학습이 있습니다. 다른 이름을 입력해줘.");
+        setSubmitError(t("trainModal.duplicateTitle"));
         return;
       }
     } else {
@@ -412,16 +434,18 @@ export default function TrainModal({
       if (normalized && normalized !== baseSlug) {
         const duplicateTitle = existingTitles.some((t: string) => (t || "").trim().toLowerCase() === normalized);
         if (duplicateTitle) {
-          setSubmitError("이미 동일한 이름의 학습이 있습니다. 다른 이름을 입력해줘.");
+          setSubmitError(t("trainModal.duplicateTitle"));
           return;
         }
       }
     }
 
     const resetForm = () => {
+      const defaultModel = getDefaultModel();
+      const defaultEpochs = Number(getDefaultEpochs());
       setTrainName("");
       setDesc("");
-      setEpochs(50);
+      setEpochs(Number.isFinite(defaultEpochs) ? defaultEpochs : 50);
       setOptimizer("AdamW");
       setImageSize(224);
       setBatchMin(16);
@@ -434,14 +458,14 @@ export default function TrainModal({
       setDatasetName("");
       setDatasetReport(null);
       setSelectedModelId("");
-      setModelQuery("");
+      setModelQuery(defaultModel);
       setShowModelList(false);
     };
 
     const uploadDataset = async () => {
       const fileToUse = pendingDatasetFile || datasetFile;
       if (!fileToUse) {
-        throw new Error("Dataset(.zip)이 선택되지 않았습니다.");
+        throw new Error(t("trainModal.datasetNotSelected"));
       }
       const sig = fileSignature(fileToUse);
       if (datasetUploadInfo && datasetUploadInfo.signature === sig && datasetUploadInfo.path) {
@@ -457,13 +481,16 @@ export default function TrainModal({
 
         const res = await fetch(`${API_BASE}/api/datasets/upload`, {
           method: "POST",
+          headers: {
+            ...authHeaders(),
+          },
           body: form,
         });
         if (!res.ok) {
           throw new Error(await readHttpErrorMessage(res));
         }
         const json = (await res.json()) as { dataset_path?: string; dataset_name?: string };
-        if (!json.dataset_path) throw new Error("업로드 경로를 받지 못했습니다.");
+        if (!json.dataset_path) throw new Error(t("trainModal.uploadPathMissing"));
         setDatasetUploadInfo({
           path: json.dataset_path,
           name: json.dataset_name || fileToUse.name,
@@ -482,7 +509,7 @@ export default function TrainModal({
         ? modelOptions.find((m) => m.id === selectedModelId)?.name || selectedModelId
         : "";
       const payload = {
-  project_id: resolvedProjectId,
+        project_id: resolvedProjectId,
         dataset_path:
           uploaded?.dataset_path || datasetUploadInfo?.path || initialDatasetInfo.path || undefined,
         dataset_name:
@@ -492,6 +519,7 @@ export default function TrainModal({
           datasetFile?.name ||
           datasetName ||
           undefined,
+        task: isDetailMode ? undefined : taskType,
         title: trainName || undefined,
         description: desc || undefined,
         lr: lrMin,
@@ -516,7 +544,7 @@ export default function TrainModal({
 
       const res = await fetch(endpoint, {
         method,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify(payload),
       });
 
@@ -532,7 +560,7 @@ export default function TrainModal({
         if (oldPath && newPath && newPath !== oldPath) {
           void fetch(`${API_BASE}/api/datasets/delete-path`, {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", ...authHeaders() },
             body: JSON.stringify({ target: oldPath }),
           }).catch(() => {});
         }
@@ -549,7 +577,7 @@ export default function TrainModal({
       }
     } catch (error) {
       console.error("Failed to submit train job", error);
-      setSubmitError(error instanceof Error ? error.message : "Failed to submit train job");
+      setSubmitError(error instanceof Error ? error.message : t("train.submitFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -570,7 +598,9 @@ export default function TrainModal({
     const loadDetail = async () => {
       if (!open || !isDetailMode || !jobId || detailLoaded) return;
       try {
-        const res = await fetch(`${API_BASE}/api/jobs/${jobId}/full`);
+        const res = await fetch(`${API_BASE}/api/jobs/${jobId}/full`, {
+          headers: { ...authHeaders() },
+        });
         if (!res.ok) return;
         const data = (await res.json()) as { job?: Record<string, unknown> };
   // If history/experiment was saved, backend marks job as dataset_locked.
@@ -594,6 +624,10 @@ export default function TrainModal({
         if (typeof (data.job as any)?.title === "string") setTrainName((data.job as any).title);
         if (typeof (data.job as any)?.description === "string") setDesc((data.job as any).description);
         if (typeof (data.job as any)?.model === "string") setModelQuery((data.job as any).model);
+        if (typeof (data.job as any)?.task === "string") {
+          const t = String((data.job as any).task).toLowerCase();
+          if (t === "classify" || t === "detect") setTaskType(t);
+        }
         setDetailLoaded(true);
       } catch {
         // ignore detail load failure
@@ -615,7 +649,7 @@ export default function TrainModal({
       setAnalyzing(true);
       try {
         const url = `${API_BASE}/api/datasets/report?path=${encodeURIComponent(initialDatasetPath)}`;
-        const res = await fetch(url, { signal: controller.signal });
+        const res = await fetch(url, { signal: controller.signal, headers: { ...authHeaders() } });
         if (!res.ok) {
           throw new Error(await readHttpErrorMessage(res));
         }
@@ -693,16 +727,16 @@ export default function TrainModal({
   return (
     <Modal
       open={open}
-      title={titleText}
+      title={resolvedTitle}
   onClose={handleClose}
   size="5xl"
     >
       <div className="relative">
         {readOnly && (
-          <div className="absolute inset-0 z-20 bg-black/25 backdrop-blur-[1px] pointer-events-auto" />
+          <div className="absolute inset-0 z-20 bg-[rgb(var(--theme-overlay)/0.25)] backdrop-blur-[1px] pointer-events-auto" />
         )}
         <div
-          className={`grid gap-6 lg:grid-cols-[1.15fr_0.85fr] ${readOnly ? "pointer-events-none opacity-70" : ""}`}
+          className={`grid gap-6 lg:grid-cols-[560px_360px] ${readOnly ? "pointer-events-none opacity-70" : ""}`}
           onMouseDownCapture={(e) => {
             const t = e.target as HTMLElement;
             if (!t.closest("[data-model-box='1']")) setShowModelList(false);
@@ -721,38 +755,77 @@ export default function TrainModal({
         </div>
       )}
             <div className="text-sm font-semibold text-blue-200 uppercase tracking-[0.12em]">
-              1. Training Info
+              {t("trainModal.sectionInfo")}
             </div>
 
             <div className="text-xs text-white/45">
-              projectId: <span className="font-mono">{projectId || "—"}</span>
+              {t("trainModal.projectId")}: <span className="font-mono">{projectId || "—"}</span>
             </div>
 
             <div className="space-y-2">
-              <div className="text-sm font-semibold text-white/80">Training Name</div>
+              <div className="text-sm font-semibold text-white/80">{t("trainModal.trainingName")}</div>
               <input
                 value={trainName}
                 onChange={(e) => setTrainName(e.target.value)}
                 className="h-11 w-full rounded-xl border border-white/10 bg-black/30 px-4 text-white/85 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-                placeholder="예) YOLOv8 traffic sign"
+                placeholder={t("trainModal.trainingNamePlaceholder")}
               />
             </div>
 
             <div className="space-y-2">
-              <div className="text-sm font-semibold text-white/80">Description</div>
+              <div className="text-sm font-semibold text-white/80">{t("trainModal.description")}</div>
               <textarea
                 value={desc}
                 onChange={(e) => setDesc(e.target.value)}
                 className="min-h-[100px] w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white/85 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-                placeholder="학습에 대한 설명"
+                placeholder={t("trainModal.descriptionPlaceholder")}
               />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm font-semibold text-white/80">
+                <span>{t("trainModal.task")}</span>
+                {isDetailMode && (
+                  <span className="text-[11px] text-white/45">{t("trainModal.taskLockedHint")}</span>
+                )}
+              </div>
+              <div
+                className={`grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-black/30 p-1 ${
+                  isDetailMode ? "opacity-60 pointer-events-none" : ""
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setTaskType("classify")}
+                  className={`h-10 rounded-lg text-sm font-semibold transition ${
+                    taskType === "classify"
+                      ? "bg-emerald-500/80 text-white"
+                      : "bg-transparent text-white/70 hover:bg-white/10"
+                  }`}
+                >
+                  {t("trainModal.taskClassify")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTaskType("detect")}
+                  className={`h-10 rounded-lg text-sm font-semibold transition ${
+                    taskType === "detect"
+                      ? "bg-emerald-500/80 text-white"
+                      : "bg-transparent text-white/70 hover:bg-white/10"
+                  }`}
+                >
+                  {t("trainModal.taskDetect")}
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2" data-model-box="1">
               <div className="flex items-center justify-between text-sm font-semibold text-white/80">
-                <span>Model</span>
+                <span>{t("trainModal.model")}</span>
                 <span className="text-[11px] text-white/50">
-                  {loadingModels ? "불러오는 중..." : `${modelOptions.length}개`}
+                  {loadingModels
+                    ? t("trainModal.modelLoading")
+                    : t("trainModal.modelCount", { count: modelOptions.length })}
                 </span>
               </div>
 
@@ -765,7 +838,7 @@ export default function TrainModal({
                     setSelectedModelId("");
                     setShowModelList(true);
                     if (isDetailMode && initialModel && e.target.value !== initialModel) {
-                      setInfoMessage("모델이 변경되었습니다.");
+                      setInfoMessage(t("trainModal.modelChanged"));
                     } else {
                       setInfoMessage(null);
                     }
@@ -776,7 +849,7 @@ export default function TrainModal({
                     setShowModelList(true);
                   }}
                   onBlur={() => setTimeout(() => setShowModelList(false), 120)}
-                  placeholder="모델 검색/선택"
+                  placeholder={t("trainModal.modelSearchPlaceholder")}
                   className="h-11 w-full rounded-xl border border-white/10 bg-black/30 px-4 text-white/85 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
                 />
 
@@ -793,7 +866,7 @@ export default function TrainModal({
                     className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-black/95 text-left shadow-lg cursor-grab active:cursor-grabbing backdrop-blur"
                   >
                     {modelOptions.length === 0 ? (
-                      <div className="px-3 py-2 text-sm text-white/50">No results</div>
+                      <div className="px-3 py-2 text-sm text-white/50">{t("trainModal.modelNoResults")}</div>
                     ) : (
                       modelOptions.map((m) => (
                         <button
@@ -825,7 +898,7 @@ export default function TrainModal({
                         }}
                           className="w-full px-3 py-2 text-sm font-semibold text-blue-100 text-left hover:bg-white/10"
                         >
-                          {uploadingModel ? "Uploading..." : "내 드라이브에서 모델 불러오기"}
+                          {uploadingModel ? t("trainModal.modelUploading") : t("trainModal.modelUpload")}
                         </button>
                       </div>
                     </div>
@@ -842,10 +915,10 @@ export default function TrainModal({
             </div>
 
             <div className="space-y-2">
-              <div className="text-sm font-semibold text-white/80">Dataset (.zip)</div>
+              <div className="text-sm font-semibold text-white/80">{t("trainModal.dataset")}</div>
               {datasetLocked && (
                 <div className="rounded-xl border border-yellow-400/30 bg-yellow-500/10 px-4 py-2 text-sm font-semibold text-yellow-200">
-                  데이터셋 변경이 불가능 합니다. (학습 기록 저장됨)
+                  {t("trainModal.datasetLocked")}
                 </div>
               )}
               <div className="flex gap-2">
@@ -854,7 +927,7 @@ export default function TrainModal({
                   className={`h-11 flex-1 rounded-xl border border-white/10 bg-black/20 px-4 text-white/85 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/30 ${
                     readOnly || datasetLocked ? "opacity-50 cursor-not-allowed pointer-events-none" : "cursor-pointer"
                   }`}
-                  placeholder="파일 업로드"
+                  placeholder={t("trainModal.datasetPlaceholder")}
                   readOnly
                   tabIndex={readOnly || datasetLocked ? -1 : 0}
                   onClick={() => {
@@ -879,7 +952,7 @@ export default function TrainModal({
                     setDatasetReport(null);
                     setDatasetUploadInfo(null);
                     if (isDetailMode && file && file.name !== initialDatasetName) {
-                      setInfoMessage("데이터셋이 변경되었습니다. 적용 시 기존 파일이 교체됩니다.");
+                      setInfoMessage(t("trainModal.datasetChanged"));
                     } else {
                       setInfoMessage(null);
                     }
@@ -891,7 +964,7 @@ export default function TrainModal({
                   onClick={runAnalyze}
                   disabled={analyzing || readOnly || datasetLocked}
                 >
-                  {analyzing ? "Analyzing..." : "Analyze"}
+                  {analyzing ? t("trainModal.analyzing") : t("trainModal.analyze")}
                 </button>
               </div>
             </div>
@@ -899,11 +972,11 @@ export default function TrainModal({
 
             <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
               <div className="text-sm font-semibold text-blue-200 uppercase tracking-[0.12em]">
-                2. Training Config
+                {tEn("trainModal.sectionConfig")}
               </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div className="space-y-1">
-                <div className="text-xs font-semibold text-white/70">Optimizer</div>
+                <div className="text-xs font-semibold text-white/70">{tEn("trainModal.configOptimizer")}</div>
                 <input
                   value={optimizer}
                   onChange={(e) => setOptimizer(e.target.value)}
@@ -912,7 +985,7 @@ export default function TrainModal({
                 />
               </div>
               <div className="space-y-1">
-                <div className="text-xs font-semibold text-white/70">Image Size</div>
+                <div className="text-xs font-semibold text-white/70">{tEn("trainModal.configImageSize")}</div>
                 <input
                   type="number"
                   min={1}
@@ -922,7 +995,7 @@ export default function TrainModal({
                 />
               </div>
               <div className="space-y-1">
-                <div className="text-xs font-semibold text-white/70">Epochs</div>
+                <div className="text-xs font-semibold text-white/70">{tEn("trainModal.configEpochs")}</div>
                 <input
                   type="number"
                   min={1}
@@ -936,16 +1009,16 @@ export default function TrainModal({
 
           <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <div className="text-sm font-semibold text-blue-200 uppercase tracking-[0.12em]">
-              3. Optuna Search Space
+              {tEn("trainModal.sectionSearch")}
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {[
-                { label: "Batch Min", value: batchMin, setter: setBatchMin },
-                { label: "Batch Max", value: batchMax, setter: setBatchMax },
-                { label: "LR Initial Min", value: lrMin, setter: setLrMin },
-                { label: "LR Initial Max", value: lrMax, setter: setLrMax },
-                { label: "Momentum Min", value: momMin, setter: setMomMin },
-                { label: "Momentum Max", value: momMax, setter: setMomMax },
+                { label: tEn("trainModal.searchBatchMin"), value: batchMin, setter: setBatchMin },
+                { label: tEn("trainModal.searchBatchMax"), value: batchMax, setter: setBatchMax },
+                { label: tEn("trainModal.searchLrMin"), value: lrMin, setter: setLrMin },
+                { label: tEn("trainModal.searchLrMax"), value: lrMax, setter: setLrMax },
+                { label: tEn("trainModal.searchMomentumMin"), value: momMin, setter: setMomMin },
+                { label: tEn("trainModal.searchMomentumMax"), value: momMax, setter: setMomMax },
               ].map((item) => (
                 <div key={item.label} className="space-y-1">
                   <div className="text-xs font-semibold text-white/70">{item.label}</div>
@@ -960,43 +1033,19 @@ export default function TrainModal({
             </div>
           </div>
 
-          <div className="pt-2 flex justify-end gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                handleClose();
-              }}
-              className="h-11 rounded-xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/80 hover:bg-white/10 transition"
-            >
-              취소
-            </button>
-
-            <button
-              type="button"
-              disabled={!trainName.trim() || (requireProjectId && !projectId) || submitting || uploadingDataset}
-              onClick={handleSubmit}
-              className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white shadow-[0_15px_35px_rgba(59,130,246,0.45)] transition hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600"
-            >
-              {uploadingDataset
-                ? "업로드 중..."
-                : submitting
-                  ? (saveLabel ? `${saveLabel} 중...` : "생성 중...")
-                  : saveLabel || "생성"}
-            </button>
-          </div>
         </div>
 
         <div className="rounded-2xl border border-white/10 bg-black/40 p-3 text-left text-white/70 min-h-[420px]">
           {/* Outer wrapper: lets us add more report sections below in the future */}
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-            <div className="text-sm font-semibold text-white/80">Dataset Report</div>
+            <div className="text-sm font-semibold text-white/80">{t("trainModal.reportTitle")}</div>
 
             {!datasetReport ? (
               <div className="mt-6 flex h-[330px] items-center justify-center text-center">
                 <div>
-                  <div className="text-lg font-bold">Upload &amp; Click Analyze</div>
+                  <div className="text-lg font-bold">{t("trainModal.reportEmptyTitle")}</div>
                   <div className="mt-2 text-sm text-white/50">
-                    ( 업로드가 완료되면 자동으로 분석이 시작됩니다. )
+                    {t("trainModal.reportEmptyHint")}
                   </div>
                   <div className="mt-4"></div>
                 </div>
@@ -1007,27 +1056,27 @@ export default function TrainModal({
                 <div className="flex-1 w-full space-y-2 flex flex-col">
                   {datasetReport.healthScore !== undefined && (
                     <div className="inline-flex items-center rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-200">
-                      Health {datasetReport.healthScore} / 100
+                      {t("trainModal.reportHealth")} {datasetReport.healthScore} / 100
                     </div>
                   )}
                   <div className="text-white/85 font-semibold break-words">{datasetReport.name}</div>
                   <div className="text-sm text-white/55">
-                    Size: <span className="font-mono">{datasetReport.sizeText}</span>
+                    {t("trainModal.reportSize")}: <span className="font-mono">{datasetReport.sizeText}</span>
                   </div>
                   <div className="text-sm text-white/55">
-                    Type: <span className="font-mono">{datasetReport.type}</span>
+                    {t("trainModal.reportType")}: <span className="font-mono">{datasetReport.type}</span>
                   </div>
                   <div className="text-sm text-white/55">
-                    Modified: <span className="font-mono">{datasetReport.lastModified}</span>
+                    {t("trainModal.reportModified")}: <span className="font-mono">{datasetReport.lastModified}</span>
                   </div>
                   {datasetReport.totalImages !== undefined && (
                     <div className="text-sm text-white/55">
-                      Total Images: <span className="font-mono">{datasetReport.totalImages}</span>
+                      {t("trainModal.reportTotalImages")}: <span className="font-mono">{datasetReport.totalImages}</span>
                     </div>
                   )}
                   {datasetReport.duplicates !== undefined && (
                     <div className="text-sm text-amber-200">
-                      Duplicates detected: {datasetReport.duplicates}
+                      {t("trainModal.reportDuplicates")}: {datasetReport.duplicates}
                     </div>
                   )}
                 </div>
@@ -1035,7 +1084,7 @@ export default function TrainModal({
                 {pieSlices.length > 0 && (
                   <div className="w-full max-w-[220px] rounded-xl border border-white/10 bg-black/30 p-3">
                     <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/55">
-                      Class Mix
+                      {t("trainModal.reportClassMix")}
                     </div>
                     <div className="mt-2 flex items-center justify-center">
                       <svg viewBox="0 0 100 100" className="h-40 w-40">
@@ -1051,7 +1100,7 @@ export default function TrainModal({
                         ))}
                         <circle cx="50" cy="50" r="20" fill="#0f172a" opacity={0.9} />
                         <text x="50" y="48" textAnchor="middle" className="fill-white text-[10px] font-semibold">
-                          Total
+                          {t("trainModal.reportTotal")}
                         </text>
                         <text x="50" y="60" textAnchor="middle" className="fill-white text-[12px] font-bold">
                           {datasetReport.totalImages ?? 0}
@@ -1064,7 +1113,7 @@ export default function TrainModal({
 
               {datasetReport.imbalance && (
                 <div className="w-full rounded-xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 text-sm text-amber-100">
-                  Imbalance detected. 일부 클래스 데이터가 부족해요. 증강을 추천합니다.
+                  {t("trainModal.reportImbalance")}
                 </div>
               )}
 
@@ -1088,6 +1137,31 @@ export default function TrainModal({
               </div>
             )}
           </div>
+        </div>
+
+        <div className="pt-2 flex justify-end gap-3 lg:col-span-2">
+          <button
+            type="button"
+            onClick={() => {
+              handleClose();
+            }}
+            className="h-11 rounded-xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/80 hover:bg-white/10 transition"
+          >
+            {t("common.cancel")}
+          </button>
+
+          <button
+            type="button"
+            disabled={!trainName.trim() || (requireProjectId && !projectId) || submitting || uploadingDataset}
+            onClick={handleSubmit}
+            className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white shadow-[0_15px_35px_rgba(59,130,246,0.45)] transition hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600"
+          >
+            {uploadingDataset
+              ? t("trainModal.uploading")
+              : submitting
+                ? t("trainModal.submitting", { action: actionLabel })
+                : actionLabel}
+          </button>
         </div>
       </div>
       </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { API_BASE, apiFetch } from "../apis/api";
 import { readHttpErrorMessage } from "../utils/httpError";
 import { getAuthToken } from "../utils/auth";
+import { useI18n } from "../i18n";
 
 type ModelItem = {
   id: string;
@@ -19,6 +20,7 @@ type Props = {
 
 export default function ModelManagerModal({ open, onClose }: Props) {
   const HEADER_BTN_H = 40; // px
+  const { t } = useI18n();
   const [models, setModels] = useState<ModelItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -50,7 +52,7 @@ export default function ModelManagerModal({ open, onClose }: Props) {
   const data = await apiFetch<ModelItem[]>("/api/models");
       setModels(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load models");
+      setError(e instanceof Error ? e.message : t("projects.apiErrorHelp"));
       setModels([]);
     } finally {
       setLoading(false);
@@ -61,7 +63,7 @@ export default function ModelManagerModal({ open, onClose }: Props) {
     if (!file) return;
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
     if (ext !== "py") {
-      setError("모델 업로드는 .py 파일만 지원합니다.");
+      setError(t("models.uploadOnlyPy"));
       return;
     }
     const base = file.name.replace(/\.[^.]+$/, "");
@@ -87,26 +89,26 @@ export default function ModelManagerModal({ open, onClose }: Props) {
       const created = (await res.json()) as ModelItem;
       setModels((prev) => [created, ...prev]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
+      setError(e instanceof Error ? e.message : t("models.uploadFailed"));
     } finally {
       setUploading(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    const ok = window.confirm("이 모델을 삭제할까요?");
+    const ok = window.confirm(t("models.deleteConfirm"));
     if (!ok) return;
     try {
   await apiFetch<void>(`/api/models/${id}`, { method: "DELETE" });
       setModels((prev) => prev.filter((m) => m.id !== id));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "삭제 실패");
+      setError(e instanceof Error ? e.message : t("models.deleteFailed"));
     }
   };
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[rgb(var(--theme-overlay)/0.55)] p-4"
       role="dialog"
       aria-modal="true"
       aria-label="models"
@@ -114,20 +116,20 @@ export default function ModelManagerModal({ open, onClose }: Props) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="relative w-full max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-[#0b1020] shadow-[0_30px_120px_rgba(0,0,0,0.65)]">
+      <div className="relative w-full max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-[rgb(var(--theme-panel-strong))] shadow-[0_30px_120px_rgba(0,0,0,0.65)]">
         <div
           className="border-b border-white/10 bg-white/[0.03] px-6 py-4"
           style={{ ["--mm-btn-h" as never]: `${HEADER_BTN_H}px` } as never}
         >
           <div className="flex items-start justify-between gap-4">
-            <div className="mt-1 text-lg font-extrabold text-white/90">Models</div>
+            <div className="mt-1 text-lg font-extrabold text-white/90">{t("models.title")}</div>
             {/* top-right intentionally empty: buttons are anchored bottom-right */}
             <div aria-hidden="true" />
           </div>
 
           <div className="mt-1 flex items-end justify-between gap-3 min-h-[var(--mm-btn-h)]">
             <div className="text-sm text-white/60 leading-none pb-[3px]">
-              {loading ? "불러오는 중..." : `${models.length}개 모델`}
+              {loading ? t("common.loading") : t("models.count", { count: models.length })}
             </div>
 
             <div className="flex items-end gap-2">
@@ -136,7 +138,7 @@ export default function ModelManagerModal({ open, onClose }: Props) {
                 onClick={() => setShowTerminal((v) => !v)}
                 className="h-10 rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/10"
               >
-                터미널
+                {t("models.terminal")}
               </button>
               <label className="h-10 inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/80 hover:border-white/20 hover:bg-white/10 cursor-pointer transition">
                 <input
@@ -150,7 +152,7 @@ export default function ModelManagerModal({ open, onClose }: Props) {
                     e.target.value = "";
                   }}
                 />
-                {uploading ? "Uploading..." : "모델 업로드"}
+                {uploading ? t("common.loading") : t("models.upload")}
               </label>
             </div>
           </div>
@@ -165,7 +167,7 @@ export default function ModelManagerModal({ open, onClose }: Props) {
 
           {showTerminal && (
             <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-              <div className="text-xs font-semibold text-white/60">터미널 (pip 명령 등)</div>
+              <div className="text-xs font-semibold text-white/60">{t("models.terminalHint")}</div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <input
                   value={cmd}
@@ -202,20 +204,20 @@ export default function ModelManagerModal({ open, onClose }: Props) {
                   disabled={running}
                   className="h-10 rounded-xl border border-sky-300/30 bg-sky-400/15 px-4 text-sm font-semibold text-sky-100 transition hover:border-sky-200/60 hover:bg-sky-400/25 disabled:opacity-50"
                 >
-                  {running ? "Running..." : "Run"}
+                  {running ? t("common.loading") : t("models.run")}
                 </button>
               </div>
               <div className="min-h-[140px] rounded-xl border border-white/10 bg-black/20 p-3 font-mono text-xs text-white/80 whitespace-pre-wrap">
-                {terminalOutput || "출력 없음"}
+                {terminalOutput || t("models.noOutput")}
               </div>
             </div>
           )}
 
           <div className="max-h-[360px] overflow-y-auto rounded-xl border border-white/10 bg-white/[0.02] divide-y divide-white/5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {loading ? (
-              <div className="px-4 py-6 text-center text-white/60">불러오는 중...</div>
+              <div className="px-4 py-6 text-center text-white/60">{t("common.loading")}</div>
             ) : models.length === 0 ? (
-              <div className="px-4 py-6 text-center text-white/60">등록된 모델이 없습니다.</div>
+              <div className="px-4 py-6 text-center text-white/60">{t("models.empty")}</div>
             ) : (
               models.map((m) => (
                 <div key={m.id} className="flex items-center justify-between px-5 py-4">
@@ -225,7 +227,7 @@ export default function ModelManagerModal({ open, onClose }: Props) {
                     onClick={() => void handleDelete(m.id)}
                     className="h-10 rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/70 hover:border-white/20 hover:bg-white/10 transition"
                   >
-                    삭제
+                    {t("models.delete")}
                   </button>
                 </div>
               ))
@@ -239,7 +241,7 @@ export default function ModelManagerModal({ open, onClose }: Props) {
             onClick={onClose}
             className="h-10 rounded-xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/10"
           >
-            Close
+            {t("common.close")}
           </button>
         </div>
       </div>

@@ -23,3 +23,19 @@ export function clearAuthToken() {
     // ignore
   }
 }
+
+export function getAuthEmail(): string | null {
+  const token = getAuthToken();
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  const padded = payload + "===".slice((payload.length + 3) % 4);
+  try {
+    const decoded = atob(padded);
+    const obj = JSON.parse(decoded) as { email?: unknown };
+    return typeof obj.email === "string" ? obj.email : null;
+  } catch {
+    return null;
+  }
+}

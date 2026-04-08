@@ -1,6 +1,7 @@
 // src/routes/experiments.js
 const express = require("express");
 const axios = require("axios");
+const { authHeaders } = require("../utils/forwardAuth");
 
 const router = express.Router();
 
@@ -26,6 +27,7 @@ router.get("/experiments", async (req, res) => {
     const upstream = await axios.get(`${FAST_API_BASE}/experiments`, {
       params: req.query,
       validateStatus: () => true,
+      headers: authHeaders(req),
     });
     res.status(upstream.status).send(upstream.data);
   } catch (err) {
@@ -36,7 +38,7 @@ router.get("/experiments", async (req, res) => {
 router.post("/experiments", async (req, res) => {
   try {
     const upstream = await axios.post(`${FAST_API_BASE}/experiments`, req.body, {
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...authHeaders(req) },
       validateStatus: () => true,
     });
     res.status(upstream.status).send(upstream.data);
@@ -59,6 +61,7 @@ router.get("/experiments/:id", async (req, res) => {
   try {
     const upstream = await axios.get(`${FAST_API_BASE}/experiments/${encodeURIComponent(req.params.id)}`, {
       validateStatus: () => true,
+      headers: authHeaders(req),
     });
     res.status(upstream.status).send(upstream.data);
   } catch (err) {
@@ -70,6 +73,7 @@ router.delete("/experiments/:id", async (req, res) => {
   try {
     const upstream = await axios.delete(`${FAST_API_BASE}/experiments/${encodeURIComponent(req.params.id)}`, {
       validateStatus: () => true,
+      headers: authHeaders(req),
     });
     res.status(upstream.status).send(upstream.data);
   } catch (err) {

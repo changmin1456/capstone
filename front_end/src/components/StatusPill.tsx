@@ -4,7 +4,7 @@ const STATUS_THEME: Record<
   ExperimentStatus,
   { bg: string; text: string; border: string; glow?: string }
 > = {
-  DONE: { bg: "bg-emerald-500/15", text: "text-emerald-200", border: "border-emerald-500/40" },
+  DONE: { bg: "bg-emerald-500/15", text: "text-emerald-500", border: "border-emerald-500/40" },
   RUNNING: { bg: "bg-sky-500/15", text: "text-sky-200", border: "border-sky-400/40" },
   FAILED: { bg: "bg-rose-600/20", text: "text-rose-100", border: "border-rose-500/50" },
   QUEUED: { bg: "bg-emerald-500/15", text: "text-emerald-100", border: "border-emerald-400/40" },

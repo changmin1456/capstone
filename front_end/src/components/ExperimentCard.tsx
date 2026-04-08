@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import StatusPill, { type ExperimentStatus } from "./StatusPill";
+import { useI18n } from "../i18n";
 
 export type Experiment = {
   id: string;
@@ -23,6 +24,7 @@ type Props = {
 };
 
 export default function ExperimentCard({ item, onDelete, onView, onEpochChange }: Props) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [epochDraft, setEpochDraft] = useState(item.epochs.toString());
@@ -63,7 +65,7 @@ export default function ExperimentCard({ item, onDelete, onView, onEpochChange }
     } catch (err) {
       setEpochDraft(item.epochs.toString());
       setEditing(false);
-      alert(err instanceof Error ? err.message : "업데이트에 실패했습니다.");
+      alert(err instanceof Error ? err.message : t("common.updateFailed"));
     } finally {
       setBusy(false);
     }
@@ -106,8 +108,8 @@ export default function ExperimentCard({ item, onDelete, onView, onEpochChange }
               role="button"
               tabIndex={0}
               className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white/80"
-              aria-label="close"
-              title="close"
+              aria-label={t("common.close")}
+              title={t("common.close")}
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete?.(item.id);
@@ -133,7 +135,7 @@ export default function ExperimentCard({ item, onDelete, onView, onEpochChange }
 
         <div className="mt-6 rounded-xl border border-white/10 bg-black/30 px-5 py-4">
           <div className="flex items-center justify-between">
-            <div className="text-sm text-white/45">Epochs</div>
+            <div className="text-sm text-white/45">{t("jobDashboard.epochs")}</div>
             {editing ? (
               <input
                 ref={inputRef}
@@ -193,7 +195,7 @@ export default function ExperimentCard({ item, onDelete, onView, onEpochChange }
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-2 text-sm font-semibold text-blue-300/90 transition group-hover:text-blue-200">
-          <span>View Result</span>
+          <span>{t("train.viewResult")}</span>
           <span className="text-blue-300/70 transition group-hover:translate-x-0.5 group-hover:text-blue-200">
             →
           </span>

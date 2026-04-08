@@ -11,7 +11,12 @@ function getBearerToken(req) {
 
 function requireAuth(req, res, next) {
   try {
-    const token = getBearerToken(req);
+    let token = getBearerToken(req);
+    if (!token) {
+      const q = req.query && (req.query.token || req.query.access_token);
+      if (typeof q === "string") token = q;
+      if (Array.isArray(q) && typeof q[0] === "string") token = q[0];
+    }
     if (!token) {
       return res.status(401).json({ error: "Missing Bearer token" });
     }

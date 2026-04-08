@@ -7,6 +7,10 @@ export type Project = {
   description?: string;
   createdAt?: string;
   updatedAt?: string;
+  created_at?: string;
+  updated_at?: string;
+  last_run_at?: string;
+  lastRunAt?: string;
 };
 
 function normalizeProject(raw: Project): Project {

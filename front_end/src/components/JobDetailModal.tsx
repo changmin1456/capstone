@@ -1,4 +1,5 @@
 import TrainModal from "./TrainModal";
+import { useI18n } from "../i18n";
 
 type Props = {
   open: boolean;
@@ -35,13 +36,15 @@ export default function JobDetailModal({
   epochs,
   onUpdated,
 }: Props) {
+  const { t } = useI18n();
+
   return (
     <TrainModal
       open={open}
       onClose={onClose}
       projectId={projectId}
       jobId={jobId}
-      titleText="Job Detail"
+      titleText={t("train.detailTitle")}
       // 초기값은 props로 주지만, TrainModal 내부에서 /api/jobs/:id/full 로드로 보완합니다.
       initialTitle={title}
       initialDescription={description}
@@ -49,7 +52,7 @@ export default function JobDetailModal({
       initialDatasetName={datasetName}
       initialDatasetPath={datasetPath}
       initialEpochs={epochs}
-      saveLabel="적용"
+      saveLabel={t("common.apply")}
       readOnly={Boolean(readOnly)}
       onCreated={() => {
         onUpdated?.();
