@@ -225,7 +225,10 @@ export default function ProjectsPage() {
         <div className="rounded-2xl border border-[rgb(var(--c-white-10))] bg-[rgb(var(--c-white-03))] p-4 sm:p-5 shadow-[0_20px_60px_rgb(var(--c-black)/0.35)]">
 
           {error && (
-            <div className="rounded-xl border border-[rgb(var(--c-red-500-30))] bg-[rgb(var(--c-red-500-10))] px-4 py-3 text-sm text-[rgb(var(--c-red-100))]">
+            <div
+              className="mb-6 rounded-xl border border-[rgb(var(--c-red-500))] bg-[rgb(var(--c-red-500-10))] px-4 py-3 text-sm text-theme-text"
+              style={{ marginBottom: "20px" }}
+            >
               {error}
             </div>
           )}
@@ -371,7 +374,7 @@ export default function ProjectsPage() {
       >
         <div className="space-y-5">
           {createError && (
-            <div className="rounded-xl border border-[rgb(var(--c-rose-400-50))] bg-[rgb(var(--c-rose-500-10))] px-4 py-3 text-sm text-[rgb(var(--c-rose-100))]">
+            <div className="rounded-xl border border-[rgb(var(--c-rose-400-50))] bg-[rgb(var(--c-rose-500-10))] px-4 py-3 text-sm text-theme-text">
               {createError}
             </div>
           )}

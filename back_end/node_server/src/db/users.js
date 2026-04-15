@@ -62,7 +62,7 @@ async function ensureAdminUser({ email, password }) {
     return { ...existing, role: "admin" };
   }
 
-  // NOTE: The fixed admin password is intentionally short (e.g. "8625").
+  // NOTE: The fixed admin password is intentionally short (e.g. "admin").
   // Keep normal user password rules (>= 8) in `hashPassword`, but allow
   // this bootstrap path to set the admin password via bcrypt directly.
   const cost = Number(process.env.BCRYPT_COST || 10);

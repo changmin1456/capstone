@@ -3,10 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { apiLogin, apiRegister } from "../apis/auth.ts";
 import { useI18n } from "../i18n";
 
-function isValidEmail(email: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-}
-
 export default function AuthPage() {
   const nav = useNavigate();
   const { t } = useI18n();
@@ -21,7 +17,7 @@ export default function AuthPage() {
   const [error, setError] = useState<string | null>(null);
 
   const canSubmit = useMemo(() => {
-    const okEmail = isValidEmail(email);
+    const okEmail = email.trim().length > 0;
     const okPw = password.length > 0;
     if (!okEmail || !okPw) return false;
     if (mode === "register") return passwordConfirm.length > 0 && passwordConfirm === password;

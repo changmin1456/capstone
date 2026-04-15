@@ -7,6 +7,15 @@ const { requireAuth } = require("../middleware/auth");
 const { requireAdmin } = require("../middleware/admin");
 
 const router = express.Router();
+const ADMIN_LOGIN_ID = "admin";
+
+function isEmailFormat(value) {
+  return String(value || "").includes("@");
+}
+
+function isAdminLoginId(value) {
+  return String(value || "").trim().toLowerCase() === ADMIN_LOGIN_ID;
+}
 
 function publicUser(u) {
   return {
@@ -32,7 +41,7 @@ router.post("/auth/register", async (req, res) => {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
 
-    if (!email || !email.includes("@")) {
+    if (!email || !isEmailFormat(email)) {
       return res.status(400).json({ error: "Invalid email" });
     }
 
@@ -168,7 +177,7 @@ router.post("/auth/password", requireAuth, async (req, res) => {
 router.post("/auth/password-reset/request", async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
-    if (!email || !email.includes("@")) {
+    if (!email || (!isEmailFormat(email) && !isAdminLoginId(email))) {
       return res.status(400).json({ error: "Invalid email" });
     }
 
@@ -198,7 +207,7 @@ router.post("/auth/password-reset/admin", requireAdmin, async (req, res) => {
     const token = String(req.body?.resetToken || "").trim();
     const newPassword = String(req.body?.newPassword || "");
 
-    if (!email || !email.includes("@")) {
+    if (!email || (!isEmailFormat(email) && !isAdminLoginId(email))) {
       return res.status(400).json({ error: "Invalid email" });
     }
     if (!token) {

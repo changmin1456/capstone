@@ -1,0 +1,70 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: capston-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: dlops
+    volumes:
+      - mongo-data:/data/db
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: capston-mongo-express
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
+
+  fastapi:
+    build:
+      context: ./back_end
+      dockerfile: fast_server/Dockerfile
+    container_name: capston-fastapi
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: mongodb://mongo:27017/
+
+  node:
+    build:
+      context: ./back_end
+      dockerfile: node_server/Dockerfile
+    container_name: capston-node
+    restart: unless-stopped
+    depends_on:
+      - mongo
+      - fastapi
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://mongo:27017/
+      FAST_API_BASE: http://fastapi:8000
+      API_BASE: http://node:3000
+
+  front:
+    build:
+      context: ./front_end
+    container_name: capston-front
+    restart: unless-stopped
+    depends_on:
+      - node
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE: http://localhost:3000
+
+volumes:
+  mongo-data:

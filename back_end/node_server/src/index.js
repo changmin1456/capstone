@@ -15,8 +15,8 @@ async function startServer() {
       // Seed / enforce the fixed admin account.
       // NOTE: This runs only when Mongo is connected.
       await ensureAdminUser({
-        email: "changmin1456@naver.com",
-        password: "8625",
+        email: "admin",
+        password: "admin",
       });
     } catch (mongoErr) {
       // Dev-friendly: allow Node to boot even if Mongo isn't up yet.

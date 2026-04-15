@@ -11,7 +11,7 @@ const { authHeaders } = require("../utils/forwardAuth");
 const router = express.Router();
 
 // FastAPI server
-const FAST_API_BASE = "http://127.0.0.1:8000";
+const FAST_API_BASE = process.env.FAST_API_BASE || "http://127.0.0.1:8000";
 
 const DATASET_ROOT = path.join(__dirname, "../../../fast_server/datasets");
 const DATASET_OWNER_FILE = "dataset.owner.json";

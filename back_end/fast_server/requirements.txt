@@ -4,5 +4,7 @@ pymongo
 python-multipart
 pyjwt
 passlib[bcrypt]
+PyYAML
+ultralytics
 
 email-validator

@@ -5,7 +5,7 @@ const { authHeaders } = require("../utils/forwardAuth");
 
 const router = express.Router();
 
-const FAST_API_BASE = "http://127.0.0.1:8000";
+const FAST_API_BASE = process.env.FAST_API_BASE || "http://127.0.0.1:8000";
 
 /**
  * @swagger

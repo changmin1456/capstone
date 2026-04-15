@@ -1,0 +1,10 @@
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.DS_Store
+**/.git
+node_server/node_modules
+fast_server/runs
+fast_server/YOLOv8

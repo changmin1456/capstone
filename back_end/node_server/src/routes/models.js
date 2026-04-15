@@ -12,7 +12,7 @@ const { authHeaders } = require("../utils/forwardAuth");
 const router = express.Router();
 
 // FastAPI server
-const FAST_API_BASE = "http://127.0.0.1:8000";
+const FAST_API_BASE = process.env.FAST_API_BASE || "http://127.0.0.1:8000";
 const MODELS_DIR = path.join(__dirname, "../../../fast_server/models");
 
 async function listDiskModels() {

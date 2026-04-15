@@ -960,7 +960,7 @@ export default function TrainModal({
                 />
                 <button
                   type="button"
-                  className="h-11 rounded-xl border border-emerald-400/40 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-400/60 hover:bg-emerald-500/30"
+                  className="h-11 rounded-xl bg-emerald-500/80 px-4 text-sm font-semibold text-white transition hover:bg-emerald-500/90"
                   onClick={runAnalyze}
                   disabled={analyzing || readOnly || datasetLocked}
                 >
@@ -1052,10 +1052,13 @@ export default function TrainModal({
               </div>
             ) : (
               <div className="mt-4 space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-6">
-                <div className="flex-1 w-full space-y-2 flex flex-col">
+              <div className="flex flex-col gap-4">
+                <div className="w-full space-y-2 flex flex-col">
                   {datasetReport.healthScore !== undefined && (
-                    <div className="inline-flex items-center rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-200">
+                    <div
+                      className="inline-flex self-start items-center rounded-full border border-emerald-400/35 bg-emerald-200/40 px-2.5 py-0.5 text-xs font-semibold text-black"
+                      style={{ width: "max-content" }}
+                    >
                       {t("trainModal.reportHealth")} {datasetReport.healthScore} / 100
                     </div>
                   )}
@@ -1082,7 +1085,7 @@ export default function TrainModal({
                 </div>
 
                 {pieSlices.length > 0 && (
-                  <div className="w-full max-w-[220px] rounded-xl border border-white/10 bg-black/30 p-3">
+                  <div className="w-full max-w-[320px] rounded-xl border border-white/10 bg-black/30 p-3">
                     <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/55">
                       {t("trainModal.reportClassMix")}
                     </div>

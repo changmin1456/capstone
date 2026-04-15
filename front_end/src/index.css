@@ -209,7 +209,7 @@
   --color-text-muted: 100 116 139;
   --color-border: 203 213 225;
   --color-accent: 37 99 235;
-  --color-danger: 225 29 72;
+  --color-danger: 15 23 42;
   --color-success: 16 185 129;
   --color-warning: 245 158 11;
   --theme-bg: 245 247 251;
@@ -477,4 +477,39 @@ body {
 
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+.text-theme-text {
+  color: rgb(var(--color-text));
+}
+
+:root[data-theme="light"] .text-rose-100,
+:root[data-theme="light"] .text-rose-200,
+:root[data-theme="light"] .text-rose-300,
+:root[data-theme="light"] .text-rose-400,
+:root[data-theme="light"] .text-rose-500,
+:root[data-theme="light"] .text-rose-600,
+:root[data-theme="light"] .text-rose-700,
+:root[data-theme="light"] .text-red-100,
+:root[data-theme="light"] .text-red-200,
+:root[data-theme="light"] .text-red-300,
+:root[data-theme="light"] .text-red-400,
+:root[data-theme="light"] .text-red-500,
+:root[data-theme="light"] .text-red-600,
+:root[data-theme="light"] .text-red-700,
+:root[data-theme="light"] .text-amber-200,
+:root[data-theme="light"] .text-yellow-200 {
+  color: rgb(var(--c-slate-900));
+}
+
+/* Error borders: use plain red instead of fluorescent pink/red tones */
+.border-rose-400\/40,
+.border-rose-400\/50,
+.border-rose-400\/60,
+.border-rose-400\/70,
+.border-rose-500\/50,
+.border-\[rgb\(var\(--c-red-500-30\)\)\],
+.border-\[rgb\(var\(--c-rose-400-50\)\)\],
+.border-\[rgb\(var\(--c-rose-500-25\)\)\] {
+  border-color: rgb(220 38 38 / 0.75);
 }

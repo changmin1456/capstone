@@ -183,7 +183,7 @@ export default function SettingsModal({ open, onClose, onLogout }: Props) {
             <button
               type="button"
               onClick={onLogout}
-              className="h-10 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 text-sm font-semibold text-rose-600 transition hover:border-rose-300/80 hover:bg-rose-500/25"
+              className="h-10 min-w-[112px] rounded-xl border border-red-500/70 bg-red-500/10 px-5 text-sm font-semibold text-red-600 transition hover:border-red-500/80 hover:bg-red-500/15"
             >
               {t("settings.logout")}
             </button>
@@ -196,7 +196,7 @@ export default function SettingsModal({ open, onClose, onLogout }: Props) {
                 <button
                   type="button"
                   onClick={() => setPasswordModalOpen(true)}
-                  className="h-9 rounded-xl border border-white/10 bg-white/5 px-4 text-xs font-semibold text-black transition hover:border-white/20 hover:bg-white/10"
+                  className="h-10 min-w-[112px] rounded-xl border border-white/15 bg-white/5 px-5 text-sm font-semibold text-[rgb(var(--theme-btn-text))] transition hover:border-white/25 hover:bg-white/10"
                 >
                   {t("settings.passwordChangeButton")}
                 </button>
@@ -208,7 +208,7 @@ export default function SettingsModal({ open, onClose, onLogout }: Props) {
               control: (
                 <button
                   type="button"
-                  className="h-9 rounded-xl border border-rose-400/50 bg-rose-500/10 px-4 text-xs font-semibold text-rose-600 transition hover:border-rose-300/70 hover:bg-rose-500/20"
+                  className="h-10 min-w-[112px] rounded-xl border border-red-500/70 bg-red-500/10 px-5 text-sm font-semibold text-red-600 transition hover:border-red-500/80 hover:bg-red-500/15"
                   onClick={() => setDeleteModalOpen(true)}
                 >
                   {t("settings.accountDeleteButton")}

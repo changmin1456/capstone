@@ -31,7 +31,7 @@ async function requireJobOwnerOrAdmin(req, res) {
 const router = express.Router();
 
 // FastAPI 서버 주소
-const FAST_API_BASE = "http://127.0.0.1:8000";
+const FAST_API_BASE = process.env.FAST_API_BASE || "http://127.0.0.1:8000";
 
 const JOBS_COLLECTION = process.env.JOBS_COLLECTION || "jobs";
 const PROJECTS_COLLECTION = process.env.PROJECTS_COLLECTION || "projects";

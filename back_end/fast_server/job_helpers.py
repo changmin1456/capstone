@@ -370,7 +370,7 @@ def _build_cmd(job_id: str, job: Dict[str, Any], resume: bool) -> Tuple[list, Pa
     yolo_exe = shutil.which("yolo") or "yolo"
 
     cmd = [
-        yolo_exe,  # ultralytics CLI
+        yolo_exe,
         "train",
         f"data={data_path}",
         f"model={model_path if not effective_resume else str(resume_ckpt)}",

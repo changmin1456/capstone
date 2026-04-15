@@ -321,7 +321,7 @@ export default function ProjectDetailPage() {
         </div>
         <div className="h-px w-full bg-[rgb(var(--c-white-10))]" />
 
-  <div className="relative rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--c-white-035))] p-6 space-y-6">
+  <div className="relative rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--c-white-08))] p-6 space-y-6">
         <style>{`
           input[type="number"]::-webkit-inner-spin-button,
           input[type="number"]::-webkit-outer-spin-button {

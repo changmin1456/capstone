@@ -21,7 +21,7 @@ async function main() {
   const db = getDb();
 
   // Ensure admin exists and use it for backfill.
-  const admin = await ensureAdminUser({ email: "changmin1456@naver.com", password: "8625" });
+  const admin = await ensureAdminUser({ email: "admin", password: "admin" });
   const adminId = String(admin._id);
 
   const projectsCol = db.collection(PROJECTS_COLLECTION);
