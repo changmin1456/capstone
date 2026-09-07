@@ -9,7 +9,7 @@ from typing import Optional
 from bson import ObjectId
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
 
-from db import jobs_col, progress_col
+from db import jobs_col, progress_col, models_meta_col
 from endpoints.auth import get_current_user, is_admin
 from job_helpers import (
     JOB_ACTIVE,
@@ -32,6 +32,12 @@ def _runs_root() -> Path:
     p = Path(root)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _saved_models_root() -> Path:
+    root = _fast_server_dir().parent / "saved_models"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _resolve_model_path(job: dict, job_id: str) -> Optional[Path]:
@@ -90,7 +96,7 @@ def _run_deploy_convert(job_id: str, target_norm: str, output_stub: str) -> None
     _set_deploy_fields(job_id, status="running", message="변환 중입니다.", started_at=datetime.utcnow())
 
     ext = ".onnx" if target_norm == "onnx" else ".engine"
-    out_dir = Path(__file__).resolve().parents[1] / "saved_models" / "deploy"
+    out_dir = _saved_models_root() / "deploy"
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = out_dir / f"{output_stub}{ext}"
 
@@ -407,7 +413,7 @@ def deploy_job(
         "message": "변환/배포를 시작합니다.",
         "requested_at": datetime.utcnow(),
         # Folder path the UI can request to open (dev-only).
-        "open_path": str(Path(__file__).resolve().parents[1] / "saved_models" / "deploy"),
+        "open_path": str(_saved_models_root() / "deploy"),
         "output_stub": output_stub,
     }
     jobs_col.update_one({"_id": job["_id"]}, {"$set": {"deploy": record}})
@@ -423,3 +429,60 @@ def deploy_job(
             "output_url": f"/files/deploy/{output_stub}{'.onnx' if target_norm == 'onnx' else '.engine'}",
         },
     }
+
+
+@router.post("/jobs/{job_id}/deploy/register-model")
+def register_deploy_model(job_id: str, model_id: Optional[str] = None, user=Depends(get_current_user)):
+    job = _get_job_or_404(job_id, user)
+    deploy = job.get("deploy") if isinstance(job.get("deploy"), dict) else {}
+    deploy_status = str((deploy or {}).get("status") or "").lower()
+    if deploy_status != "completed":
+        raise HTTPException(status_code=409, detail="Deploy is not completed")
+
+    raw_output_path = (deploy or {}).get("output_path")
+    if not isinstance(raw_output_path, str) or not raw_output_path.strip():
+        raise HTTPException(status_code=400, detail="deploy output_path missing")
+    src = Path(raw_output_path).resolve()
+    if not src.exists() or not src.is_file():
+        output_url = (deploy or {}).get("output_url")
+        if isinstance(output_url, str) and output_url.strip():
+            fname = Path(output_url).name
+            alt = (_saved_models_root() / "deploy" / fname).resolve()
+            if alt.exists() and alt.is_file():
+                src = alt
+    if not src.exists() or not src.is_file():
+        output_stub = str((deploy or {}).get("output_stub") or "").strip()
+        target = str((deploy or {}).get("target") or "").strip().lower()
+        ext = ".onnx" if target == "onnx" else ".engine" if target == "tensorrt" else ""
+        if output_stub and ext:
+            alt = (_saved_models_root() / "deploy" / f"{output_stub}{ext}").resolve()
+            if alt.exists() and alt.is_file():
+                src = alt
+    if not src.exists() or not src.is_file():
+        raise HTTPException(status_code=404, detail="deploy output file not found")
+
+    uploads_dir = _fast_server_dir() / "models" / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = (model_id or src.stem).strip()
+    safe_stem = "".join(ch for ch in base_name if ch.isalnum() or ch in ("-", "_"))[:64] or src.stem
+    dst = uploads_dir / f"{safe_stem}{src.suffix.lower()}"
+    if dst.exists():
+        dst = uploads_dir / f"{safe_stem}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{src.suffix.lower()}"
+
+    shutil.copy2(src, dst)
+
+    visibility = "public" if is_admin(user) else "private"
+    doc = {
+        "modelId": dst.name,
+        "id": dst.name,
+        "name": dst.name,
+        "description": f"Imported from deploy output (job {job_id})",
+        "category": "deploy",
+        "file_path": str(dst),
+        "visibility": visibility,
+        "ownerUserId": user["id"],
+    }
+    models_meta_col.update_one({"modelId": dst.name}, {"$set": doc}, upsert=True)
+    _set_deploy_fields(job_id, registered_model_id=dst.name, registered_at=datetime.utcnow())
+    return doc

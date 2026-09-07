@@ -775,6 +775,33 @@ router.post("/jobs/:id/deploy", requireAuth, async (req, res) => {
   }
 });
 
+router.post("/jobs/:id/deploy/register-model", requireAuth, async (req, res) => {
+  try {
+    const { id: jobId } = req.params;
+    const modelId = (req.query?.model_id || "").toString();
+
+    const gate = await requireJobOwnerOrAdmin(req, res);
+    if (!gate.ok) return;
+
+    const response = await axios.post(`${FAST_API_BASE}/jobs/${jobId}/deploy/register-model`, null, {
+      params: modelId ? { model_id: modelId } : undefined,
+      headers: authHeaders(req),
+    });
+
+    res.status(response.status).json(response.data);
+  } catch (err) {
+    console.error("Error calling FastAPI /jobs/:id/deploy/register-model:", err.message);
+
+    if (err.response) {
+      const status = err.response.status;
+      const errorMessage = err.response.data?.detail || err.response.data?.error || "failed to register deploy model";
+      return res.status(status).json({ error: errorMessage });
+    }
+
+    res.status(500).json({ error: "failed to register deploy model: " + err.message });
+  }
+});
+
 // -------------------------
 // XAI: Node -> FastAPI proxy
 // -------------------------

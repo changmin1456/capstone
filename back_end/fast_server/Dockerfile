@@ -7,6 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY fast_server/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip uninstall -y opencv-python || true \
+ && pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 COPY fast_server ./
 RUN mkdir -p ../saved_models

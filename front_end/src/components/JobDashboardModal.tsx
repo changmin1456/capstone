@@ -50,6 +50,10 @@ export default function JobDashboardModal({
   const [xaiModalOpen, setXaiModalOpen] = useState(false);
   const [deployStatus, setDeployStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [deployMessage, setDeployMessage] = useState<string | null>(null);
+  const [deployCompleted, setDeployCompleted] = useState(false);
+  const [registeringDeployModel, setRegisteringDeployModel] = useState(false);
+  const [downloadingDeployModel, setDownloadingDeployModel] = useState(false);
+  const [deployOutputUrl, setDeployOutputUrl] = useState<string | null>(null);
   type XaiSourceKey = "training_results" | "dataset_train" | "dataset_val";
   type XaiSource = { key: XaiSourceKey; label: string; available: boolean };
   type XaiImageItem = { id: string; label: string; url: string };
@@ -1483,9 +1487,34 @@ export default function JobDashboardModal({
     return out || t("jobDashboard.processFailed");
   };
 
+  const fetchDeployState = async (): Promise<{ status?: string; message?: string; outputUrl?: string } | null> => {
+    if (!jobId) return null;
+    try {
+      const jres = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}`);
+      if (!jres.ok) return null;
+      const j = (await jres.json().catch(() => null)) as any;
+      const deploy = j?.deploy;
+      if (!deploy || typeof deploy !== "object") return null;
+      return {
+        status: (deploy.status || "").toString().toLowerCase(),
+        message: typeof deploy.message === "string" ? deploy.message : undefined,
+        outputUrl:
+          typeof deploy.output_url === "string"
+            ? deploy.output_url
+            : typeof deploy.outputUrl === "string"
+              ? deploy.outputUrl
+              : undefined,
+      };
+    } catch {
+      return null;
+    }
+  };
+
   const handleDeploy = async () => {
     if (!jobId) return;
     setDeploying(true);
+    setDeployCompleted(false);
+    setDeployOutputUrl(null);
     setDeployStatus("loading");
     setDeployMessage(null);
     try {
@@ -1516,6 +1545,7 @@ export default function JobDashboardModal({
         status?: string;
         message?: string;
         outputPath?: string;
+        outputUrl?: string;
       } | null> => {
         try {
           const jres = await fetchAuthed(`${API_BASE}/api/jobs/${jobId}`);
@@ -1532,6 +1562,12 @@ export default function JobDashboardModal({
                 ? deploy.output_path
                 : typeof deploy.outputPath === "string"
                   ? deploy.outputPath
+                  : undefined,
+            outputUrl:
+              typeof deploy.output_url === "string"
+                ? deploy.output_url
+                : typeof deploy.outputUrl === "string"
+                  ? deploy.outputUrl
                   : undefined,
           };
         } catch {
@@ -1554,11 +1590,14 @@ export default function JobDashboardModal({
           if (st === "completed") {
             setDeployMessage(sanitizeDeployErrorMessage(info?.message || t("jobDashboard.deployCompleted")));
             setDeployStatus("success");
+            setDeployCompleted(true);
+            setDeployOutputUrl(info?.outputUrl || null);
             return;
           }
           if (st === "failed") {
             setDeployMessage(sanitizeDeployErrorMessage(info?.message || t("jobDashboard.deployFailedMessage")));
             setDeployStatus("error");
+            setDeployCompleted(false);
             return;
           }
 
@@ -1577,30 +1616,86 @@ export default function JobDashboardModal({
     }
   };
 
-  const handleOpenConvertedFolder = async () => {
-    // 브라우저에서 로컬 폴더를 직접 여는 건 불가하므로,
-    // 개발 환경에서는 node_server의 /api/terminal 라우트를 이용해 Finder(open) 실행.
-    // (배포 환경에서는 별도 전용 API를 두는 걸 권장)
+  const handleRegisterDeployModel = async () => {
     if (!jobId) return;
+    setRegisteringDeployModel(true);
     try {
-  const cmd = `open /Users/changmin/Projects/capston/back_end/saved_models/deploy`;
-      const res = await fetchAuthed(`${API_BASE}/api/terminal`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cmd }),
-      });
-      if (!res.ok) {
-      setDeployMessage(
-        t("jobDashboard.openFolderFailed", { reason: sanitizeDeployErrorMessage(await readHttpErrorMessage(res)) }),
-      );
+      const deployInfo = await fetchDeployState();
+      if ((deployInfo?.status || "") !== "completed") {
         setDeployStatus("error");
+        setDeployCompleted(false);
+        setDeployMessage(t("jobDashboard.deployNotCompleted"));
         return;
       }
-      setDeployMessage(t("jobDashboard.openFolderSuccess"));
-      setDeployStatus("idle");
-    } catch {
-      setDeployMessage(t("jobDashboard.openFolderError"));
+      const qs = new URLSearchParams();
+      const modelId = deployOutputName.trim();
+      if (modelId) qs.set("model_id", modelId);
+      const res = await fetchAuthed(
+        `${API_BASE}/api/jobs/${jobId}/deploy/register-model${qs.toString() ? `?${qs.toString()}` : ""}`,
+        { method: "POST" },
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const reason =
+          (data && (data.error || data.detail || data.message) && String(data.error || data.detail || data.message)) ||
+          t("jobDashboard.deployRegisterFailed");
+        throw new Error(reason);
+      }
+      setDeployStatus("success");
+      setDeployCompleted(true);
+      setDeployMessage(t("jobDashboard.deployRegisterDone"));
+    } catch (e) {
       setDeployStatus("error");
+      setDeployMessage(
+        sanitizeDeployErrorMessage(e instanceof Error ? e.message : t("jobDashboard.deployRegisterFailed")),
+      );
+    } finally {
+      setRegisteringDeployModel(false);
+    }
+  };
+
+  const handleDownloadDeployModel = async () => {
+    if (!jobId) return;
+    setDownloadingDeployModel(true);
+    try {
+      const state = await fetchDeployState();
+      const rawUrl = deployOutputUrl || state?.outputUrl || "";
+      if ((state?.status || "") !== "completed" || !rawUrl) {
+        setDeployStatus("error");
+        setDeployMessage(t("jobDashboard.deployNotCompleted"));
+        setDeployCompleted(false);
+        return;
+      }
+      setDeployCompleted(true);
+      setDeployOutputUrl(rawUrl);
+      const proxiedUrl = toNodeFileUrl(rawUrl);
+      const url =
+        proxiedUrl.startsWith("http://") || proxiedUrl.startsWith("https://")
+          ? proxiedUrl
+          : `${API_BASE}${proxiedUrl}`;
+      const res = await fetchAuthed(url);
+      if (!res.ok) {
+        throw new Error(await readHttpErrorMessage(res));
+      }
+      const blob = await res.blob();
+      const fallbackName = decodeURIComponent((rawUrl.split("/").pop() || "model.bin").split("?")[0]);
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = fallbackName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+      setDeployStatus("success");
+      setDeployMessage(t("jobDashboard.deployDownloadDone"));
+    } catch (e) {
+      setDeployStatus("error");
+      setDeployMessage(
+        sanitizeDeployErrorMessage(e instanceof Error ? e.message : t("jobDashboard.deployDownloadFailed")),
+      );
+    } finally {
+      setDownloadingDeployModel(false);
     }
   };
 
@@ -1612,6 +1707,21 @@ export default function JobDashboardModal({
     // When switching jobs, keep a sensible default.
     setDeployOutputName(jobId || "");
   }, [jobId]);
+
+  useEffect(() => {
+    if (!deployModalOpen || !jobId) return;
+    let cancelled = false;
+    (async () => {
+      const info = await fetchDeployState();
+      if (cancelled) return;
+      const completed = (info?.status || "") === "completed";
+      setDeployCompleted(completed);
+      setDeployOutputUrl(completed ? info?.outputUrl || null : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deployModalOpen, jobId]);
 
   const formatVal = (v: number) => {
     const abs = Math.abs(v);
@@ -2214,6 +2324,7 @@ export default function JobDashboardModal({
                 setDeployModalOpen(true);
                 setDeployStatus("idle");
                 setDeployMessage(null);
+                setDeployCompleted(false);
               }}
               disabled={!canUseDeployActions || deploying || !jobId}
               className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-left shadow-sm transition ${
@@ -2266,6 +2377,7 @@ export default function JobDashboardModal({
               setDeployModalOpen(false);
               setDeployStatus("idle");
               setDeployMessage(null);
+              setDeployCompleted(false);
             }}
           >
             <div
@@ -2335,11 +2447,19 @@ export default function JobDashboardModal({
                   </button>
                   <button
                     type="button"
-                    onClick={handleOpenConvertedFolder}
-                    disabled={!jobId}
+                    onClick={handleDownloadDeployModel}
+                    disabled={!jobId || downloadingDeployModel || !deployCompleted}
                     className="rounded-lg border border-white/10 px-4 py-3 text-sm font-semibold text-[rgb(var(--theme-btn-text))] hover:bg-white/5 transition disabled:opacity-60"
                   >
-                    {t("common.open")}
+                    {downloadingDeployModel ? t("jobDashboard.deployDownloading") : t("jobDashboard.deployDownload")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRegisterDeployModel}
+                    disabled={!jobId || registeringDeployModel || !deployCompleted}
+                    className="rounded-lg border border-emerald-400/60 bg-emerald-400/20 px-4 py-3 text-sm font-semibold text-[rgb(var(--theme-btn-text))] hover:bg-emerald-400/30 transition disabled:opacity-60"
+                  >
+                    {registeringDeployModel ? t("jobDashboard.deployRegistering") : t("jobDashboard.deployRegisterModel")}
                   </button>
                   <button
                     type="button"
@@ -2347,6 +2467,7 @@ export default function JobDashboardModal({
                       setDeployModalOpen(false);
                       setDeployStatus("idle");
                       setDeployMessage(null);
+                      setDeployCompleted(false);
                     }}
                     className="rounded-lg border border-white/10 px-4 py-3 text-sm font-semibold text-[rgb(var(--theme-btn-text))] hover:bg-white/5 transition"
                   >
